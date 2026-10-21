@@ -1,0 +1,139 @@
+import { env } from "cloudflare:workers";
+import { catalog, loadBook } from "./books";
+import { defaults, type Settings, type Word } from "./types";
+import { localDay, outcomes, review, scheduler, reviveCard } from "./study";
+export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
+export function db() { if (!env.DB) throw new Error("数据存储尚未就绪"); return env.DB; }
+export async function settingsFor(uid: string): Promise<Settings> {
+  const row = await db().prepare("SELECT settings FROM profiles WHERE user_id=?").bind(uid).first<{settings:string}>();
+  return { ...defaults, ...(row ? JSON.parse(row.settings) : {}) };
+}
+export function validateSettings(input: any): Settings {
+  if (!input || typeof input !== "object") throw new HttpError(400,"设置格式无效");
+  const s: Settings = {currentBook: input.currentBook, newLimit: input.newLimit, reviewLimit: input.reviewLimit, retention: input.retention, timezone: input.timezone, autoAudio: input.autoAudio, accent: input.accent};
+  if (typeof s.currentBook !== "string" || (s.currentBook && s.currentBook !== "custom" && !catalog.some(b=>b.id===s.currentBook))) throw new HttpError(400,"请选择有效词书");
+  if (!Number.isInteger(s.newLimit) || s.newLimit<0 || s.newLimit>500 || !Number.isInteger(s.reviewLimit) || s.reviewLimit<0 || s.reviewLimit>5000) throw new HttpError(400,"新词上限应为 0–500，复习上限应为 0–5000");
+  if (typeof s.retention !== "number" || !Number.isFinite(s.retention) || s.retention<.7 || s.retention>.99) throw new HttpError(400,"目标保留率应为 70%–99%");
+  try { if (typeof s.timezone !== "string") throw 0; new Intl.DateTimeFormat("en", {timeZone:s.timezone}); } catch { throw new HttpError(400,"时区无效"); }
+  if (typeof s.autoAudio !== "boolean" || !["us","uk"].includes(s.accent)) throw new HttpError(400,"发音设置无效");
+  return s;
+}
+export async function saveSettings(uid: string, s: Settings) {
+  await db().prepare("INSERT INTO profiles(user_id,settings) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET settings=excluded.settings").bind(uid,JSON.stringify(s)).run();
+}
+export async function customFor(uid: string): Promise<Word[]> {
+  const r = await db().prepare("SELECT data FROM custom_words WHERE user_id=? ORDER BY created_at DESC").bind(uid).all<{data:string}>();
+  return r.results.map(r=>JSON.parse(r.data));
+}
+async function wordsFor(uid: string, s: Settings, origin: string) {
+  const custom = await customFor(uid);
+  return s.currentBook && s.currentBook !== "custom" ? [...await loadBook(s.currentBook,origin), ...custom] : custom;
+}
+export async function overview(uid: string) {
+  const s=await settingsFor(uid), day=localDay(s.timezone);
+  const result=await db().batch([
+    db().prepare("SELECT COUNT(*) total, SUM(CASE WHEN is_new=1 THEN 1 ELSE 0 END) new_count, SUM(CASE WHEN is_new=0 THEN 1 ELSE 0 END) review_count FROM reviews WHERE user_id=? AND day=?").bind(uid,day),
+    db().prepare("SELECT book_id, data, due FROM cards WHERE user_id=?").bind(uid),
+    db().prepare("SELECT day, COUNT(*) count FROM reviews WHERE user_id=? GROUP BY day ORDER BY day DESC LIMIT 365").bind(uid),
+    db().prepare("SELECT COUNT(*) count FROM custom_words WHERE user_id=?").bind(uid),
+  ]);
+  const daily:any=result[0].results[0]; const all:any[]=result[1].results;
+  const active=all.filter(c=>c.book_id===s.currentBook || c.book_id==="custom");
+  const now=new Date(), states=[0,0,0,0]; let retention=0, n=0;
+  for (const row of all) {const c=reviveCard(row.data);states[c.state]++;if(c.last_review && c.stability>0){retention+=Number(scheduler(s).get_retrievability(c,now,false));n++;}}
+  const learned=all.filter(c=>c.book_id===s.currentBook).length;
+  const due=active.filter(c=>c.due<=now.toISOString()).length;
+  const book = catalog.find(b=>b.id===s.currentBook);
+  const total=s.currentBook==="custom"? Number((result[3].results[0] as any).count):book?.count || 0;
+  return {settings:s, stats:{today:day, newToday:Number(daily.new_count||0), reviewedToday:Number(daily.review_count||0), totalToday:Number(daily.total||0), due, learned, total, allLearned:all.length, retention:n?Math.round(retention/n*100):null, states, customCount:Number((result[3].results[0] as any).count)}, series:result[2].results, books:catalog.map(({url,...b})=>b)};
+}
+export async function nextCard(uid: string, origin: string) {
+  const s=await settingsFor(uid); const now=new Date();const day=localDay(s.timezone,now);
+  const [words, result]=await Promise.all([wordsFor(uid,s,origin), db().batch([
+    db().prepare("SELECT word_id, data, due, version FROM cards WHERE user_id=? AND (book_id=? OR book_id='custom') ORDER BY due").bind(uid,s.currentBook),
+    db().prepare("SELECT SUM(is_new) new_count, SUM(CASE WHEN is_new=0 THEN 1 ELSE 0 END) review_count FROM reviews WHERE user_id=? AND day=?").bind(uid,day),
+  ])]);
+  const cards:any[]=result[0].results; const counts:any=result[1].results[0]; const map=new Map(words.map(w=>[w.id,w]));
+  const due=cards.filter(c=>c.due<=now.toISOString() && map.has(c.word_id));
+  const canReview=!s.reviewLimit || Number(counts.review_count||0)<s.reviewLimit;
+  const row=canReview?due[0]:undefined;
+  const learned=new Set(cards.map(c=>c.word_id));
+  const word=row?map.get(row.word_id):Number(counts.new_count||0)<s.newLimit?words.find(w=>!learned.has(w.id)):undefined;
+  if (!word) return {word:null, due:due.length, nextDue:cards.find(c=>c.due>now.toISOString())?.due || null, reason:!words.length?"选择词书或添加生词，开始你的第一次学习。":!canReview&&due.length?"今日复习额度已完成，明天继续。":"当前学习任务已完成，稍后再来看看。"};
+  return {word, version:row?.version || 0, isNew:!row, outcomes:outcomes(row?.data || null,s,now), due:due.length};
+}
+export async function submitReview(uid: string, input: any, origin: string) {
+  if (!input || typeof input.wordId!=="string" || ![1,2,3,4].includes(input.rating) || !Number.isInteger(input.version) || input.version<0 || typeof input.requestId!=="string" || !/^[\da-f-]{36}$/i.test(input.requestId)) throw new HttpError(400,"评分格式无效");
+  const requestId=`${uid}:${input.requestId}`;
+  if(await db().prepare("SELECT id FROM reviews WHERE id=? AND user_id=?").bind(requestId,uid).first()) return {ok:true};
+  const s=await settingsFor(uid), now=new Date(), day=localDay(s.timezone,now);
+  const word=(await wordsFor(uid,s,origin)).find(w=>w.id===input.wordId);
+  if (!word) throw new HttpError(404,"当前学习列表中没有此单词");
+  const old=await db().prepare("SELECT data,version,due FROM cards WHERE user_id=? AND word_id=?").bind(uid,word.id).first<{data:string;version:number;due:string}>();
+  if ((old?.version || 0)!==input.version || (old && old.due>now.toISOString())) throw new HttpError(409,"卡片已在其他窗口更新，请刷新学习队列");
+  const card=review(old?.data || null,input.rating,s,now);
+  const duration=Number.isFinite(input.duration)?Math.min(3600000,Math.max(0,Math.round(input.duration))):0;
+  const limit=old?s.reviewLimit || 2147483647:s.newLimit;
+  const result=await db().batch([
+    db().prepare(`INSERT INTO cards(user_id,word_id,book_id,word,data,due,version) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM reviews WHERE user_id=? AND day=? AND is_new=?)<? ON CONFLICT(user_id,word_id) DO UPDATE SET data=excluded.data,due=excluded.due,version=excluded.version WHERE cards.version=?`).bind(uid,word.id,word.bookId,word.word,JSON.stringify(card),card.due.toISOString(),input.version+1,uid,day,old?0:1,limit,input.version),
+    db().prepare("INSERT INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration) SELECT ?,?,?,?,?,?,?,?,?,? WHERE changes()=1").bind(requestId,uid,word.id,word.bookId,word.word,input.rating,now.toISOString(),day,old?0:1,duration),
+  ]);
+  if (!result[0].meta.changes) throw new HttpError(409,"学习额度或卡片状态已更新，请刷新后继续");
+  return {ok:true};
+}
+export function validateWord(input: any): Omit<Word,"id"|"rank"|"bookId"> {
+  if(!input || typeof input!=="object")throw new HttpError(400,"生词格式无效");
+  const text=(v:any,max:number,required=false)=>{if(typeof v!=="string" || v.length>max || (required&&!v.trim()))throw new HttpError(400,"请填写有效的单词和释义，并控制字段长度");return v.trim();};
+  const pairs=(a:any)=>{if(!Array.isArray(a)||a.length>20)throw new HttpError(400,"短语或例句格式无效");return a.map(p=>({content:text(p.content,2000),cn:text(p.cn,2000)}));};
+  return {word:text(input.word,120,true), definition:text(input.definition,4000,true), phonetic:text(input.phonetic || "",150),phoneticUk:text(input.phoneticUk || "",150),phrases:pairs(input.phrases || []),sentences:pairs(input.sentences || [])};
+}
+export async function addWord(uid:string,input:any) {
+  const valid=validateWord(input);const id=`custom:${crypto.randomUUID()}`;
+  const w:Word={...valid,id,bookId:"custom",rank:Date.now()};
+  await db().prepare("INSERT INTO custom_words(user_id,id,data,created_at) VALUES(?,?,?,?)").bind(uid,id,JSON.stringify(w),new Date().toISOString()).run();
+  return {word:w};
+}
+export async function history(uid:string, page=0) {
+  return (await db().prepare("SELECT word,rating,reviewed_at,duration FROM reviews WHERE user_id=? ORDER BY reviewed_at DESC LIMIT 50 OFFSET ?").bind(uid,page*50).all()).results;
+}
+export async function exportBackup(uid:string) {
+  const results=await db().batch([
+    db().prepare("SELECT word_id,book_id,word,data,due,version FROM cards WHERE user_id=? ORDER BY word_id").bind(uid),
+    db().prepare("SELECT id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration FROM reviews WHERE user_id=? ORDER BY reviewed_at").bind(uid),
+  ]);
+  return {app:"MemoDashCloud",version:1,exportedAt:new Date().toISOString(),settings:await settingsFor(uid),words:await customFor(uid),cards:results[0].results,reviews:results[1].results.map((r:any)=>({...r,id:r.id.slice(uid.length+1)}))};
+}
+export async function importBackup(uid:string,input:any) {
+  if(!input || !["words","cards","reviews","settings"].includes(input.kind)) throw new HttpError(400,"导入格式无效");
+  if(input.kind==="settings"){await saveSettings(uid,validateSettings(input.settings));return {ok:true};}
+  if(!Array.isArray(input.rows)||input.rows.length>50)throw new HttpError(400,"每次最多导入 50 条记录");
+  const text=(v:any,max=200)=>{if(typeof v!=="string"||!v.length||v.length>max)throw new HttpError(400,"备份包含无效文本");return v;};
+  const iso=(v:any)=>{if(typeof v!=="string"||!Number.isFinite(+new Date(v)))throw new HttpError(400,"备份时间无效");return new Date(v).toISOString();};
+  const statements:D1PreparedStatement[]=[];
+  for(const row of input.rows){
+    if(!row || typeof row!=="object")throw new HttpError(400,"备份记录无效");
+    if(input.kind==="words"){
+      const w=validateWord(row);const id=text(row.id);if(!id.startsWith("custom:")||!Number.isSafeInteger(row.rank))throw new HttpError(400,"生词编号无效");
+      statements.push(db().prepare("INSERT OR IGNORE INTO custom_words(user_id,id,data,created_at) VALUES(?,?,?,?)").bind(uid,id,JSON.stringify({...w,id,bookId:"custom",rank:row.rank}),new Date().toISOString()));
+      continue;
+    }
+    const wordId=text(row.word_id),bookId=text(row.book_id),word=text(row.word,120);
+    if(bookId!=="custom"&&!catalog.some(b=>b.id===bookId))throw new HttpError(400,"备份词书无效");
+    if(!wordId.startsWith(`${bookId}:`))throw new HttpError(400,"词条编号与词书不匹配");
+    if(input.kind==="cards"){
+      if(bookId==="custom"&&!await db().prepare("SELECT id FROM custom_words WHERE user_id=? AND id=?").bind(uid,wordId).first())throw new HttpError(400,"请先导入对应生词");
+      let c;try{c=typeof row.data==="string"?JSON.parse(row.data):row.data;}catch{throw new HttpError(400,"卡片格式无效");}
+      if(!c || ![0,1,2,3].includes(c.state)||![c.stability,c.difficulty,c.elapsed_days,c.scheduled_days,c.learning_steps,c.reps,c.lapses].every(v=>typeof v==="number"&&Number.isFinite(v)&&v>=0)||c.difficulty>10||c.stability>100000||!Number.isInteger(c.learning_steps)||c.learning_steps>1||!Number.isInteger(c.reps)||!Number.isInteger(c.lapses))throw new HttpError(400,"卡片调度状态无效");
+      const due=iso(c.due),last=c.last_review?iso(c.last_review):undefined;
+      const safe={due,last_review:last,state:c.state,stability:c.stability,difficulty:c.difficulty,elapsed_days:c.elapsed_days,scheduled_days:c.scheduled_days,learning_steps:c.learning_steps,reps:c.reps,lapses:c.lapses};
+      statements.push(db().prepare("INSERT OR IGNORE INTO cards(user_id,word_id,book_id,word,data,due,version) VALUES(?,?,?,?,?,?,1)").bind(uid,wordId,bookId,word,JSON.stringify(safe),due));
+    }else{
+      if(![1,2,3,4].includes(row.rating)||![0,1].includes(row.is_new)||!Number.isInteger(row.duration)||row.duration<0||row.duration>3600000||typeof row.day!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(row.day))throw new HttpError(400,"复习日志无效");
+      const at=iso(row.reviewed_at),id=`${uid}:${text(row.id,250)}`;
+      if(!await db().prepare("SELECT word_id FROM cards WHERE user_id=? AND word_id=?").bind(uid,wordId).first())throw new HttpError(400,"请先导入对应卡片");
+      statements.push(db().prepare("INSERT OR IGNORE INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(id,uid,wordId,bookId,word,row.rating,at,row.day,row.is_new,row.duration));
+    }
+  }
+  if(statements.length)await db().batch(statements);
+  return {ok:true,processed:statements.length};
+}
