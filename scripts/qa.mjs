@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+
 const origin=process.argv[2] || 'http://127.0.0.1:8787';
 const uid=`qa_${crypto.randomUUID()}`, other=`qa_${crypto.randomUUID()}`;
 async function request(path,body,user=uid,override={}){
@@ -42,15 +42,9 @@ await request('settings',{...a.data.settings,newLimit:1},quotaUser);
 const concurrent=await Promise.all([q1,q2].map(w=>request('review',{wordId:w.id,version:0,rating:3,requestId:crypto.randomUUID()},quotaUser)));
 assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);
 assert.equal((await request('overview',undefined,quotaUser)).data.stats.newToday,1);
-const legacyUser=`qa_legacy_${crypto.randomUUID()}`;
-const legacy=JSON.parse(await readFile(new URL('../outputs/legacy-migration.json',import.meta.url),'utf8'));
-for(const kind of ['words','cards','reviews'])for(let i=0;i<legacy[kind].length;i+=50){const r=await request('import',{kind,rows:legacy[kind].slice(i,i+50)},legacyUser);assert.equal(r.status,200,JSON.stringify({kind,i,error:r.data.error}));}
-assert.equal((await request('import',{kind:'settings',settings:legacy.settings},legacyUser)).status,200);
-const migrated=(await request('backup',undefined,legacyUser)).data;
-assert.equal(migrated.cards.length,legacy.cards.length);assert.equal(migrated.reviews.length,legacy.reviews.length);assert.equal(migrated.words.length,legacy.words.length);
-assert.equal((await request('study',undefined,legacyUser)).status,200);
 const remoteBook=a.data.books.find(b=>b.id==='KaoYanluan_1');
 await request('settings',{...a.data.settings,currentBook:remoteBook.id},quotaUser);
 const remote=await request('study',undefined,quotaUser);assert.equal(remote.status,200,JSON.stringify(remote.data));
-console.log(`PASS: concurrent daily quota, full legacy migration (${migrated.cards.length} cards / ${migrated.reviews.length} reviews), server wordbook initialization (${remoteBook.id}).`);
+console.log(`PASS: concurrent daily quota, server wordbook initialization (${remoteBook.id}).`);
 console.log('PASS: anonymous access, two-user isolation, input validation, CSRF, FSRS scheduling, duplicate/stale ratings, quotas, history, backup roundtrip, shared server wordbook and rating.');
+

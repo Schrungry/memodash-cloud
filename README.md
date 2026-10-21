@@ -1,45 +1,59 @@
-# MemoDash 网站版
+# MemoDash
 
-从原 MemoDash FastAPI 单用户应用移植到 Sites / Cloudflare Workers 的多人版本。保留暖色纸张、陶土橙的原有视觉方向。
+基于 FSRS 间隔重复算法的多人单词学习应用，运行于 Sites / Cloudflare Workers。
 
-## 使用
+## 功能
 
-- 用 ChatGPT 账号登录，平台提供受信任的账号身份。
-- 在「词书广场」选择词书，在「开始学习」中回忆和评分。空格显示释义，1–4 评分。
-- 81 本原有词书目录；81 本、153009 个词条全部随站点预置为压缩服务端资源，首次使用由服务端写入 R2 缓存，无需运行时访问旧下载源。
-- 生词、设置、FSRS 卡片和复习记录保存在 D1，全部按登录用户 ID 隔离。词书内容共享，进度独立。
-- 「学习设置」提供个人数据导出、合并导入，可直接读取原 MemoDash v2 完整备份并在浏览器内转换，过滤旧 AI 凭据。缺少词条的 v1 备份需在原应用重新导出为 v2。导入不会覆盖已有卡片，重复导入相同备份不会重复插入记录。导入分批提交，中断后可以重试。
-- 保留 FSRS-6 默认参数和目标保留率设置；移除了 AI 生成功能、AI 接口设置、参数训练及其依赖。
+- ChatGPT 账号登录，个人生词、设置、卡片与复习记录按用户隔离。
+- 81 本词书、153009 个词条预置在服务端，使用 R2 缓存共享词书内容。
+- FSRS-6 复习调度、四级评分、每日学习额度与目标保留率设置。
+- 学习概览、复习统计、生词本、发音与学习历史。
+- 个人学习数据导出及合并导入，仅接受从本站导出的 JSON 备份。
+- 导入保留已有卡片进度，相同备份重复导入不会重复插入记录；分批提交，中断后可重试。
 
-新网站按用户要求仅所有者可访问。应用数据层已支持多人；未来可通过 Sites 访问设置开放受众。
+学习时按空格显示释义，按 1–4 评分。到期复习优先，词书与生词本共享每日新词额度。
 
-## 迁移原学习数据
+## 技术与存储
 
-```powershell
-python scripts/export-legacy.py 'D:\BaiduSyncdisk\code\python\memodash'
-```
+- Vinext、React、TypeScript。
+- Cloudflare Workers 提供服务端运行时。
+- Cloudflare D1 保存个人设置、生词、卡片和复习日志。
+- Cloudflare R2 保存共享词书缓存。
+- [ts-fsrs](https://github.com/open-spaced-repetition/ts-fsrs) 5.2.3 提供 FSRS-6 调度。
+- 词书资源来自有道词典及 [kajweb/dict](https://github.com/kajweb/dict)。运行时直接读取预置资源。
 
-该命令只读原数据库，生成 `outputs/legacy-migration.json`，在网站「学习设置 → 导入学习数据」中选择此文件即可。仅导出允许保留的设置，不导出 AI 凭据、训练参数或其他旧设置。`outputs/` 不进入 Git 或部署包。原数据库不被修改。
-
-`scripts/import-source.py` 只提取公开词书和目录，不复制个人学习数据。词书来源：原项目 bookLists.json / 有道词典 / [kajweb/dict](https://github.com/kajweb/dict)。调度依赖 [ts-fsrs](https://github.com/open-spaced-repetition/ts-fsrs)，锁定 5.2.3，以使用与原应用对应的 FSRS-6。
+Sites 管理访问权限。当前网站仅所有者可访问，可在 Sites 中按需调整受众。
 
 ## 开发
 
-需要 Node 22.13+。通过 Sites 项目初始化、依赖安装和发布流程管理本站；Windows 若 npm shim 无法定位自身，使用 Node 直接调用系统 npm 的 `npm-cli.js`。
+需要 Node.js 22.13+。通过 Sites 的项目初始化、依赖安装和发布流程管理本站。
 
 ```powershell
 node scripts/run-framework.mjs dev --hostname 127.0.0.1
 node node_modules/typescript/bin/tsc --noEmit --incremental false
+node --experimental-strip-types scripts/test-backup.mjs
 node scripts/run-framework.mjs build
+```
+
+本地数据库初始化（仅首次执行）：
+
+```powershell
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_light_changeling.sql
+```
+
+本地生产预览与接口检查：
+
+```powershell
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --port 8787 --inspector-port 0
 node scripts/qa.mjs
 ```
 
-开发预览提供仅 loopback 的模拟登录；生产身份由 Sites 网关验证并注入。生产 API 信任网关注入的身份头，部署时必须保留 Sites 网关边界，不应把 Worker 作为无网关认证的公网站点直接暴露。
+接口检查使用独立的本地测试账号，覆盖登录保护、数据隔离、跨站请求拒绝、输入校验、调度评分、重复及过期评分、并发额度、词书读取和备份往返。
 
-测试使用随机的本地测试账号，验证未登录访问拒绝、跨用户数据隔离、跨站请求拒绝、参数验证、四级评分、重复及过期提交、并发额度、词书 R2 读取、备份往返以及完整旧数据迁移。完整迁移测试需要先运行导出脚本。
+开发预览提供仅 loopback 可用的模拟登录。生产身份由 Sites 网关验证并注入，部署时需保留该认证边界。
 
-部署需要 D1 `DB` 和 R2 `BUCKET`，由 `.openai/hosting.json` 声明并由 Sites 自动配置。数据库迁移由 Drizzle 生成并随源代码发布。不要提交 `.wrangler/`、`.sites-runtime/`、`outputs/` 或任何凭据。
+## 发布
 
+`.openai/hosting.json` 声明 D1 `DB` 和 R2 `BUCKET`，由 Sites 配置。数据库结构变更使用 Drizzle 生成增量 SQL，由 Sites 在发布时应用。
 
+通过 Sites 工作流同步源码、打包并发布。不要提交 `.wrangler/`、`.sites-runtime/`、`outputs/` 或任何凭据。
