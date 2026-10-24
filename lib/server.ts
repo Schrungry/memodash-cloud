@@ -110,7 +110,7 @@ async function ensureHistoryWords(uid:string, origin:string, wordId?:string) {
 export async function history(uid:string, origin:string, page=0, search="") {
   await ensureHistoryWords(uid,origin);
   const query=search.trim();
-  const from="FROM reviews r LEFT JOIN history_words h ON h.user_id=r.user_id AND h.word_id=r.word_id WHERE r.user_id=? AND (?='' OR instr(lower(r.word),lower(?))>0 OR instr(lower(COALESCE(h.definition,'')),lower(?))>0)";
+  const from="FROM (SELECT *,ROW_NUMBER() OVER (PARTITION BY word_id ORDER BY reviewed_at DESC,id DESC) history_rank FROM reviews WHERE user_id=?) r LEFT JOIN history_words h ON h.user_id=r.user_id AND h.word_id=r.word_id WHERE r.history_rank=1 AND (?='' OR instr(lower(r.word),lower(?))>0 OR instr(lower(COALESCE(h.definition,'')),lower(?))>0)";
   const results=await db().batch([
     db().prepare(`SELECT r.id,r.word_id,r.book_id,r.word,r.rating,r.reviewed_at,r.duration,r.is_new,COALESCE(h.definition,'') definition ${from} ORDER BY r.reviewed_at DESC,r.id DESC LIMIT 50 OFFSET ?`).bind(uid,query,query,query,page*50),
     db().prepare(`SELECT COUNT(*) total ${from}`).bind(uid,query,query,query),

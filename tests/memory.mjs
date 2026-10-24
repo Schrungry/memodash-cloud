@@ -16,6 +16,7 @@ test("saved states produce decays and review jumps without replay estimates",()=
   assert.ok(result.reviews[0].before<100);
   assert.ok(result.current<100&&result.current>0);
   assert.equal(result.current,engine.forgetting_curve(1,c2.stability)*100);
+  assert.equal(result.difficulty,c2.difficulty);
   assert.ok(result.points.every((point,i)=>point.value>=0&&point.value<=100&&(!i||point.time>=result.points[i-1].time)));
 });
 
@@ -29,6 +30,7 @@ test("old logs are replayed and explicitly counted as estimates",()=>{
   const result=memoryTimeline([...records].reverse(),defaults,null,new Date(+second+day));
   assert.equal(result.estimatedCount,2);
   assert.equal(result.current,engine.forgetting_curve(1,c2.stability)*100);
+  assert.equal(result.difficulty,c2.difficulty);
   assert.deepEqual(result.reviews.map(row=>row.id),["2","1"]);
   assert.equal(result.reviews[1].before,null);
   assert.equal(records[0].id,"1");

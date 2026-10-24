@@ -45,5 +45,5 @@ export function memoryTimeline(records: ReviewRecord[], settings: Settings, curr
   if (!previous && currentCard) {previous=currentCard;points.push({time:Number(currentCard.last_review),value:100,phase:"after"});incomplete=true;}
   if (previous) decay(previous,Math.max(+now,Number(previous.last_review)));
   if (currentCard && previous && Number(currentCard.last_review) !== Number(previous.last_review)) incomplete=true;
-  return {points,reviews:reviews.reverse(),estimatedCount,incomplete,current:currentCard?probability(currentCard,+now):previous?probability(previous,+now):null,generatedAt:now.toISOString()};
+  return {points,reviews:reviews.reverse(),estimatedCount,incomplete,difficulty:(currentCard||previous)?.difficulty??null,current:currentCard?probability(currentCard,+now):previous?probability(previous,+now):null,generatedAt:now.toISOString()};
 }
