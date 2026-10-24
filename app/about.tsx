@@ -23,13 +23,13 @@ export default function About({ settings, onNavigate }: { settings: Settings; on
     <section className="panel about-section" aria-labelledby="about-process-title">
       <div className="section-heading"><div><h2 id="about-process-title">本站如何使用 FSRS</h2><p>从看到单词，到安排下一次复习。</p></div></div>
       <ol className="about-flow">
-        {[{title:"先独立回忆",text:"看到单词时先想一想意思，再按空格显示释义，核对自己的回忆。"},{title:"给出真实评分",text:"用 1–4 选择忘记、困难、记得或轻松。评分时记录本次学习，并更新个人卡片状态。"},{title:"计算下次时间",text:"服务端结合当前卡片、评分、经过的时间和目标保留率，计算下一次到期时间。"},{title:"到期后再次相遇",text:"在每日额度内优先呈现到期卡片，再安排当前词书和生词本中尚未学过的词。"}].map((step,i)=><li key={step.title}><span>{String(i+1).padStart(2,"0")}</span><div><h3>{step.title}</h3><p>{step.text}</p></div></li>)}
+        {[{title:"先独立回忆",text:"普通卡片先看单词、回忆含义；已学卡片有可用题目时，也可能出现例句填空或四选一考题。"},{title:"给出真实评分",text:"揭晓答案后，用 1–4 选择忘记、困难、记得或轻松。评分时记录本次学习，并更新个人卡片状态。"},{title:"计算下次时间",text:"服务端结合当前卡片、评分、经过的时间和目标保留率，计算下一次到期时间。"},{title:"到期后再次相遇",text:"在每日额度内优先呈现到期卡片，再安排当前词书和生词本中尚未学过的词。"}].map((step,i)=><li key={step.title}><span>{String(i+1).padStart(2,"0")}</span><div><h3>{step.title}</h3><p>{step.text}</p></div></li>)}
       </ol>
       <div className="about-inline-note"><Clock3 size={17}/><p>新词学习步骤设为 <b>1 分钟、10 分钟</b>；遗忘后的重学步骤为 <b>10 分钟</b>。实际进入哪个步骤、何时转为长期复习，取决于当前状态和评分。评分按钮上会显示本次预计间隔。</p></div>
     </section>
 
     <section className="panel about-section" aria-labelledby="about-ratings-title">
-      <div className="section-heading"><div><h2 id="about-ratings-title">四个评分，怎么选</h2><p>按显示释义前的真实回忆情况评分。</p></div></div>
+      <div className="section-heading"><div><h2 id="about-ratings-title">四个评分，怎么选</h2><p>按刚才回忆或答题的真实情况评分。</p></div></div>
       <div className="about-ratings">
         {[{name:"忘记",en:"Again",meaning:"没有想起来，或回忆错误。",effect:"重新巩固，通常较快再次出现。"},{name:"困难",en:"Hard",meaning:"想对了，但花了很大力气。",effect:"保守推进，安排较紧密的复习。"},{name:"记得",en:"Good",meaning:"正常、正确地回忆出了意思。",effect:"按当前记忆状态继续推进。"},{name:"轻松",en:"Easy",meaning:"很快、很有把握地想对了。",effect:"通常可以间隔更久再复习。"}].map((rating,i)=><article key={rating.en}><div><span className={`rating-tag tag-${i+1}`}>{rating.name}</span><kbd>{i+1}</kbd></div><h3>{rating.en}</h3><p>{rating.meaning}</p><small>{rating.effect}</small></article>)}
       </div>

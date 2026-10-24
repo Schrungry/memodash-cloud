@@ -1,0 +1,27 @@
+.question-face{padding:32px 0 28px}
+.question-label{display:block;margin-bottom:13px;color:#a2775e;font-size:10px;letter-spacing:.8px}
+.question-prompt{font:500 23px/1.6 var(--serif);white-space:pre-line;overflow-wrap:anywhere;color:var(--ink)}
+.cloze-form{margin-top:25px}
+.cloze-form>label{font-size:11px;color:#8f806c}
+.cloze-form>div{display:flex;align-items:flex-end;gap:11px;max-width:500px}
+.cloze-form input{margin-top:6px!important;flex:1;font-size:14px!important;padding:11px 13px!important}
+.cloze-form .button{white-space:nowrap;padding:12px 18px}
+.choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:25px}
+.choice-option{display:flex;align-items:center;gap:13px;text-align:left;background:#fdfbf8;border:1px solid #e7e0d6;border-radius:6px;padding:13px 15px;font-size:13px;min-height:52px;overflow-wrap:anywhere}
+.choice-option:not(:disabled):hover{background:#f6efe5;border-color:#d4bda8}
+.choice-option:disabled{opacity:1}
+.choice-option>span{display:grid;place-items:center;flex:none;width:21px;height:21px;border-radius:50%;border:1px solid #d6cbbb;color:#9c8064;font-size:11px}
+.choice-option.correct{background:#edf4e9;border-color:#b4ccb0;color:#486f45}
+.choice-option.correct>span{border-color:#84aa7f;color:#486f45}
+.choice-option.incorrect{background:#fbede8;border-color:#dcb4a5;color:#a55743}
+.choice-option.incorrect>span{border-color:#cb8a76;color:#a55743}
+.study-card .question-face+.word-face{border-top:1px solid #f1ece5;padding:30px 0}
+.answer-feedback{border:1px solid #e7dfd4;border-radius:6px;background:#f8f5ef;padding:15px 18px;margin-bottom:23px;display:flex;gap:8px 14px;align-items:baseline;flex-wrap:wrap}
+.answer-feedback strong{font-size:11px;color:#887865;font-weight:600}
+.answer-feedback>span{font:500 21px var(--serif);color:#5f5548}
+.answer-feedback p{flex:0 0 100%;font-size:11px;color:#928370;white-space:pre-line}
+.answer-feedback.is-correct{background:#f0f5ed;border-color:#d6e3cf}
+.answer-feedback.is-correct strong{color:#547a50}
+.answer-feedback.is-incorrect{background:#fcf1eb;border-color:#ecd6c8}
+.answer-feedback.is-incorrect strong{color:#a55c43}
+@media(max-width:700px){.question-face{padding:27px 0 22px}.question-prompt{font-size:19px;line-height:1.55}.choice-grid{grid-template-columns:1fr;gap:8px}.choice-option{font-size:12px;min-height:47px;padding:10px 12px}.cloze-form>div{flex-wrap:wrap}.cloze-form input{flex:1 0 100%}.cloze-form .button{margin-left:auto}}
