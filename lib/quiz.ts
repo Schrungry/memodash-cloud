@@ -13,7 +13,7 @@ function clozeCandidates(word: Word): Extract<ReviewQuestion, {kind: "cloze"}>[]
   const pattern = new RegExp(`(^|[^A-Za-z])(${escaped})(?=$|[^A-Za-z])`, "i");
   return (word.sentences || []).flatMap(sentence => {
     const content = sentence.content?.trim();
-    if (!content || content.length > 320 || /_{2,}/.test(content)) return [];
+    if (!content || !sentence.cn?.trim() || content.length > 320 || /_{2,}/.test(content)) return [];
     const match = pattern.exec(content);
     if (!match) return [];
     const start = match.index + match[1].length;
@@ -40,4 +40,8 @@ export function chooseReviewQuestion(word: Word, isNew: boolean, random = Math.r
 
 export function matchesClozeAnswer(input: string, answer: string) {
   return input.trim().replace(/\s+/g, " ").toLocaleLowerCase() === answer.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+export function answerLetterCount(answer: string) {
+  return Array.from(answer).filter(character => /\p{L}/u.test(character)).length;
 }

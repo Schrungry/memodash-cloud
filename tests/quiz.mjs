@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chooseReviewQuestion, matchesClozeAnswer, REVIEW_QUESTION_PROBABILITY } from "../lib/quiz.ts";
+import { answerLetterCount, chooseReviewQuestion, matchesClozeAnswer, REVIEW_QUESTION_PROBABILITY } from "../lib/quiz.ts";
 
 const word = {
   id: "book:1", bookId: "book", rank: 1, word: "Access", phonetic: "", phoneticUk: "", definition: "访问",
-  phrases: [], sentences: [{content: "There is no access to the house from the road.", cn: ""}],
+  phrases: [], sentences: [{content: "There is no access to the house from the road.", cn: "从路上无法进入这所房子。"}],
   exams: [{question: "There is no _____ to the house.", choices: [
     {choiceIndex: 1, choice: "access"}, {choiceIndex: 2, choice: "edge"},
     {choiceIndex: 3, choice: "avenue"}, {choiceIndex: 4, choice: "exposure"}],
@@ -36,4 +36,11 @@ test("a review may use the source multiple-choice question", () => {
 test("a word with no usable question stays an ordinary card", () => {
   assert.equal(chooseReviewQuestion({...word, sentences: [], exams: []}, false, () => 0), null);
   assert.equal(chooseReviewQuestion({...word, word: "act", sentences: [{content: "Action matters.", cn: ""}], exams: []}, false, () => 0), null);
+});
+
+test("cloze questions need a translation and show the count of letters in the answer", () => {
+  assert.equal(chooseReviewQuestion({...word, sentences: [{content: "There is no access.", cn: ""}], exams: []}, false, () => 0), null);
+  assert.equal(answerLetterCount("access"), 6);
+  assert.equal(answerLetterCount("re-enter"), 7);
+  assert.equal(answerLetterCount("it's"), 3);
 });

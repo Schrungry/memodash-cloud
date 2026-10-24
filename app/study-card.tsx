@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Volume2 } from "lucide-react";
 import type { Settings, Word } from "../lib/types";
-import { chooseReviewQuestion, matchesClozeAnswer } from "../lib/quiz";
+import { answerLetterCount, chooseReviewQuestion, matchesClozeAnswer } from "../lib/quiz";
 
 const labels = ["忘记", "困难", "记得", "轻松"];
 function interval(due: string) {
@@ -58,6 +58,7 @@ export default function StudyCard({card, settings, busy, onPlay, onRate}:{
       {question && <div className="question-face">
         <span className="question-label">{question.kind === "cloze" ? "补全例句中的单词" : "根据题干，选择正确答案"}</span>
         <p className="question-prompt">{question.prompt}</p>
+        {question.kind === "cloze" && <div className="cloze-support"><p className="question-translation">{question.sentence.cn}</p><div className="cloze-help"><span>答案长度：{answerLetterCount(question.answer)} 个字母</span>{!flipped && <button className="button cloze-audio-hint" type="button" disabled={busy} onClick={() => onPlay(question.answer, settings.accent)}><Volume2 size={15}/> 发音提示</button>}</div></div>}
         {question.kind === "cloze" ? !flipped && <form className="cloze-form" onSubmit={submitCloze}>
           <label htmlFor="cloze-answer">填写空缺的单词</label>
           <div><input id="cloze-answer" autoComplete="off" spellCheck={false} value={input} onChange={event => setInput(event.target.value)} placeholder="输入答案"/><button className="button primary" disabled={!input.trim() || busy} type="submit">确认答案</button></div>
