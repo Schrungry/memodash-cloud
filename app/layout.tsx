@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./question.css";
+import "./history.css";
 
 export const metadata: Metadata = {
   title: "MemoDash · 记忆日常",

@@ -3,3 +3,7 @@ export type Word = { id: string; bookId: string; rank: number; word: string; pho
 export type Book = { id: string; title: string; count: number; tags: string[]; description: string; url: string; bundled?: boolean };
 export type Settings = { currentBook: string; newLimit: number; reviewLimit: number; retention: number; timezone: string; autoAudio: boolean; accent: "us" | "uk" };
 export const defaults: Settings = { currentBook: "", newLimit: 20, reviewLimit: 200, retention: .9, timezone: "Asia/Shanghai", autoAudio: false, accent: "us" };
+export type HistoryRow = {id: string; word_id: string; book_id: string; word: string; definition: string; bookTitle: string; rating: number; reviewed_at: string; duration: number; is_new: number};
+export type MemoryPoint = {time: number; value: number; phase: "decay" | "before" | "after"};
+export type MemoryReview = {id: string; rating: number; reviewed_at: string; duration: number; is_new: number; before: number | null; after: number; estimated: boolean};
+export type WordHistory = {wordId: string; word: string; definition: string; bookTitle: string; due: string | null; current: number | null; points: MemoryPoint[]; reviews: MemoryReview[]; estimatedCount: number; incomplete: boolean; generatedAt: string};

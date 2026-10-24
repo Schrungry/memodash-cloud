@@ -2,6 +2,8 @@ import { env } from "cloudflare:workers";
 import { catalog, loadBook } from "./books";
 import { defaults, type Settings, type Word } from "./types";
 import { localDay, outcomes, review, scheduler, reviveCard } from "./study";
+import { memoryTimeline, readMemoryCard, type ReviewRecord } from "./memory";
+import type { HistoryRow, WordHistory } from "./types";
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 export function db() { if (!env.DB) throw new Error("数据存储尚未就绪"); return env.DB; }
 export async function settingsFor(uid: string): Promise<Settings> {
@@ -76,7 +78,8 @@ export async function submitReview(uid: string, input: any, origin: string) {
   const limit=old?s.reviewLimit || 2147483647:s.newLimit;
   const result=await db().batch([
     db().prepare(`INSERT INTO cards(user_id,word_id,book_id,word,data,due,version) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM reviews WHERE user_id=? AND day=? AND is_new=?)<? ON CONFLICT(user_id,word_id) DO UPDATE SET data=excluded.data,due=excluded.due,version=excluded.version WHERE cards.version=?`).bind(uid,word.id,word.bookId,word.word,JSON.stringify(card),card.due.toISOString(),input.version+1,uid,day,old?0:1,limit,input.version),
-    db().prepare("INSERT INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration) SELECT ?,?,?,?,?,?,?,?,?,? WHERE changes()=1").bind(requestId,uid,word.id,word.bookId,word.word,input.rating,now.toISOString(),day,old?0:1,duration),
+    db().prepare("INSERT INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration,card_data) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE changes()=1").bind(requestId,uid,word.id,word.bookId,word.word,input.rating,now.toISOString(),day,old?0:1,duration,JSON.stringify(card)),
+    db().prepare("INSERT INTO history_words(user_id,word_id,book_id,word,definition) VALUES(?,?,?,?,?) ON CONFLICT(user_id,word_id) DO UPDATE SET definition=excluded.definition,word=excluded.word").bind(uid,word.id,word.bookId,word.word,word.definition),
   ]);
   if (!result[0].meta.changes) throw new HttpError(409,"学习额度或卡片状态已更新，请刷新后继续");
   return {ok:true};
@@ -93,13 +96,44 @@ export async function addWord(uid:string,input:any) {
   await db().prepare("INSERT INTO custom_words(user_id,id,data,created_at) VALUES(?,?,?,?)").bind(uid,id,JSON.stringify(w),new Date().toISOString()).run();
   return {word:w};
 }
-export async function history(uid:string, page=0) {
-  return (await db().prepare("SELECT word,rating,reviewed_at,duration FROM reviews WHERE user_id=? ORDER BY reviewed_at DESC LIMIT 50 OFFSET ?").bind(uid,page*50).all()).results;
+const bookTitle = (id:string) => id==="custom" ? "我的生词本" : catalog.find(book=>book.id===id)?.title || "未知词书";
+async function ensureHistoryWords(uid:string, origin:string, wordId?:string) {
+  const missing = await db().prepare(`SELECT DISTINCT r.word_id,r.book_id,r.word FROM reviews r LEFT JOIN history_words h ON h.user_id=r.user_id AND h.word_id=r.word_id WHERE r.user_id=? AND h.word_id IS NULL${wordId?" AND r.word_id=?":""}`).bind(...(wordId?[uid,wordId]:[uid])).all<{word_id:string;book_id:string;word:string}>();
+  const groups = new Map<string,typeof missing.results>();
+  for(const row of missing.results) {const group=groups.get(row.book_id);if(group)group.push(row);else groups.set(row.book_id,[row]);}
+  for(const [bid, rows] of groups) {
+    const words=bid==="custom"?await customFor(uid):await loadBook(bid,origin);
+    const definitions=new Map(words.map(word=>[word.id,word.definition]));
+    for(let i=0;i<rows.length;i+=50) await db().batch(rows.slice(i,i+50).map(row=>db().prepare("INSERT OR IGNORE INTO history_words(user_id,word_id,book_id,word,definition) VALUES(?,?,?,?,?)").bind(uid,row.word_id,row.book_id,row.word,definitions.get(row.word_id)||"")));
+  }
+}
+export async function history(uid:string, origin:string, page=0, search="") {
+  await ensureHistoryWords(uid,origin);
+  const query=search.trim();
+  const from="FROM reviews r LEFT JOIN history_words h ON h.user_id=r.user_id AND h.word_id=r.word_id WHERE r.user_id=? AND (?='' OR instr(lower(r.word),lower(?))>0 OR instr(lower(COALESCE(h.definition,'')),lower(?))>0)";
+  const results=await db().batch([
+    db().prepare(`SELECT r.id,r.word_id,r.book_id,r.word,r.rating,r.reviewed_at,r.duration,r.is_new,COALESCE(h.definition,'') definition ${from} ORDER BY r.reviewed_at DESC,r.id DESC LIMIT 50 OFFSET ?`).bind(uid,query,query,query,page*50),
+    db().prepare(`SELECT COUNT(*) total ${from}`).bind(uid,query,query,query),
+  ]);
+  const total=Number((results[1].results[0] as any).total);
+  return {reviews:(results[0].results as Omit<HistoryRow,"bookTitle">[]).map(row=>({...row,bookTitle:bookTitle(row.book_id)})),total,hasMore:(page+1)*50<total};
+}
+export async function wordHistory(uid:string, origin:string, wordId:string):Promise<WordHistory> {
+  await ensureHistoryWords(uid,origin,wordId);
+  const [result,settings]=await Promise.all([db().batch([
+    db().prepare("SELECT id,rating,reviewed_at,duration,is_new,card_data FROM reviews WHERE user_id=? AND word_id=? ORDER BY reviewed_at,id").bind(uid,wordId),
+    db().prepare("SELECT data,due FROM cards WHERE user_id=? AND word_id=?").bind(uid,wordId),
+    db().prepare("SELECT word,definition,book_id FROM history_words WHERE user_id=? AND word_id=?").bind(uid,wordId),
+  ]),settingsFor(uid)]);
+  const word=result[2].results[0] as {word:string;definition:string;book_id:string}|undefined;
+  if(!word) throw new HttpError(404,"没有找到这个单词的学习记录");
+  const card=result[1].results[0] as {data:string;due:string}|undefined;
+  return {wordId,word:word.word,definition:word.definition,bookTitle:bookTitle(word.book_id),due:card?.due||null,...memoryTimeline(result[0].results as ReviewRecord[],settings,card?.data||null)};
 }
 export async function exportBackup(uid:string) {
   const results=await db().batch([
     db().prepare("SELECT word_id,book_id,word,data,due,version FROM cards WHERE user_id=? ORDER BY word_id").bind(uid),
-    db().prepare("SELECT id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration FROM reviews WHERE user_id=? ORDER BY reviewed_at").bind(uid),
+    db().prepare("SELECT id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration,card_data FROM reviews WHERE user_id=? ORDER BY reviewed_at").bind(uid),
   ]);
   return {app:"MemoDashCloud",version:1,exportedAt:new Date().toISOString(),settings:await settingsFor(uid),words:await customFor(uid),cards:results[0].results,reviews:results[1].results.map((r:any)=>({...r,id:r.id.slice(uid.length+1)}))};
 }
@@ -131,7 +165,9 @@ export async function importBackup(uid:string,input:any) {
       if(![1,2,3,4].includes(row.rating)||![0,1].includes(row.is_new)||!Number.isInteger(row.duration)||row.duration<0||row.duration>3600000||typeof row.day!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(row.day))throw new HttpError(400,"复习日志无效");
       const at=iso(row.reviewed_at),id=`${uid}:${text(row.id,250)}`;
       if(!await db().prepare("SELECT word_id FROM cards WHERE user_id=? AND word_id=?").bind(uid,wordId).first())throw new HttpError(400,"请先导入对应卡片");
-      statements.push(db().prepare("INSERT OR IGNORE INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(id,uid,wordId,bookId,word,row.rating,at,row.day,row.is_new,row.duration));
+      const snapshot=row.card_data==null?null:readMemoryCard(row.card_data);
+      if(row.card_data!=null && (!snapshot || Number(snapshot.last_review)!==+new Date(at)))throw new HttpError(400,"复习记录中的记忆状态无效");
+      statements.push(db().prepare("INSERT OR IGNORE INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration,card_data) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(id,uid,wordId,bookId,word,row.rating,at,row.day,row.is_new,row.duration,snapshot?JSON.stringify(snapshot):null));
     }
   }
   if(statements.length)await db().batch(statements);

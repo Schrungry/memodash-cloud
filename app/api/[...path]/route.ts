@@ -1,5 +1,5 @@
 import { getChatGPTUser } from "../../chatgpt-auth";
-import { HttpError, overview, nextCard, submitReview, saveSettings, validateSettings, customFor, addWord, history, exportBackup, importBackup } from "../../../lib/server";
+import { HttpError, overview, nextCard, submitReview, saveSettings, validateSettings, customFor, addWord, history, wordHistory, exportBackup, importBackup } from "../../../lib/server";
 export const dynamic="force-dynamic";
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{"Cache-Control":"private, no-store","Vary":"Cookie"}});
 async function handle(request:Request, context:{params:Promise<{path:string[]}>}) {
@@ -11,7 +11,8 @@ async function handle(request:Request, context:{params:Promise<{path:string[]}>}
       if(route==="study")return json(await nextCard(user.userId,url.origin));
       if(route==="words")return json({words:await customFor(user.userId)});
       if(route==="backup")return json(await exportBackup(user.userId));
-      if(route==="history") {const p=Number(url.searchParams.get("page")||0);if(!Number.isInteger(p)||p<0||p>10000)throw new HttpError(400,"页码无效");return json({reviews:await history(user.userId,p)});}
+      if(route==="history") {const p=Number(url.searchParams.get("page")||0),q=url.searchParams.get("q")||"";if(!Number.isInteger(p)||p<0||p>10000||q.length>120)throw new HttpError(400,"页码或搜索内容无效");return json(await history(user.userId,url.origin,p,q));}
+      if(route==="history/word") {const id=url.searchParams.get("wordId");if(!id||id.length>200)throw new HttpError(400,"单词编号无效");return json(await wordHistory(user.userId,url.origin,id));}
     }
     if(request.method==="POST") {
       const reader=request.body?.getReader();let size=0;const parts:Uint8Array[]=[];

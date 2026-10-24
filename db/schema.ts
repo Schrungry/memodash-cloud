@@ -27,7 +27,15 @@ export const reviews = sqliteTable("reviews", {
   day: text("day").notNull(),
   isNew: integer("is_new").notNull(),
   duration: integer("duration").notNull(),
-}, t => [index("reviews_user_day").on(t.userId, t.day)]);
+  cardData: text("card_data"),
+}, t => [index("reviews_user_day").on(t.userId, t.day), index("reviews_user_time").on(t.userId, t.reviewedAt), index("reviews_user_word_time").on(t.userId, t.wordId, t.reviewedAt)]);
+export const historyWords = sqliteTable("history_words", {
+  userId: text("user_id").notNull(),
+  wordId: text("word_id").notNull(),
+  bookId: text("book_id").notNull(),
+  word: text("word").notNull(),
+  definition: text("definition").notNull(),
+}, t => [primaryKey({ columns: [t.userId, t.wordId] })]);
 export const customWords = sqliteTable("custom_words", {
   userId: text("user_id").notNull(),
   id: text("id").notNull(),
