@@ -35,6 +35,10 @@ yarn-error.log*
 /.wrangler/
 /.sites-runtime/
 
+# Agent workspace memory and tooling state
+/.workbuddy/
+/.playwright-cli/
+
 # Workspace scaffolding and publication archives
 /.agents/
 /.codex/
