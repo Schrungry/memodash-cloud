@@ -41,8 +41,8 @@ export async function overview(uid: string) {
   ]);
   const daily:any=result[0].results[0]; const all:any[]=result[1].results;
   const active=all.filter(c=>c.book_id===s.currentBook || c.book_id==="custom");
-  const now=new Date(), states=[0,0,0,0]; let retention=0, n=0;
-  for (const row of all) {const c=reviveCard(row.data);states[c.state]++;if(c.last_review && c.stability>0){retention+=Number(scheduler(s).get_retrievability(c,now,false));n++;}}
+  const now=new Date(), states=[0,0,0,0], fsrs=scheduler(s); let retention=0, n=0;
+  for (const row of all) {const c=reviveCard(row.data);states[c.state]++;if(c.last_review && c.stability>0){retention+=Number(fsrs.get_retrievability(c,now,false));n++;}}
   const learned=all.filter(c=>c.book_id===s.currentBook).length;
   const due=active.filter(c=>c.due<=now.toISOString()).length;
   const book = catalog.find(b=>b.id===s.currentBook);
@@ -144,6 +144,7 @@ export async function importBackup(uid:string,input:any) {
   const text=(v:any,max=200)=>{if(typeof v!=="string"||!v.length||v.length>max)throw new HttpError(400,"备份包含无效文本");return v;};
   const iso=(v:any)=>{if(typeof v!=="string"||!Number.isFinite(+new Date(v)))throw new HttpError(400,"备份时间无效");return new Date(v).toISOString();};
   const statements:D1PreparedStatement[]=[];
+  const dependencies=new Set<string>();
   for(const row of input.rows){
     if(!row || typeof row!=="object")throw new HttpError(400,"备份记录无效");
     if(input.kind==="words"){
@@ -155,7 +156,7 @@ export async function importBackup(uid:string,input:any) {
     if(bookId!=="custom"&&!catalog.some(b=>b.id===bookId))throw new HttpError(400,"备份词书无效");
     if(!wordId.startsWith(`${bookId}:`))throw new HttpError(400,"词条编号与词书不匹配");
     if(input.kind==="cards"){
-      if(bookId==="custom"&&!await db().prepare("SELECT id FROM custom_words WHERE user_id=? AND id=?").bind(uid,wordId).first())throw new HttpError(400,"请先导入对应生词");
+      if(bookId==="custom")dependencies.add(wordId);
       let c;try{c=typeof row.data==="string"?JSON.parse(row.data):row.data;}catch{throw new HttpError(400,"卡片格式无效");}
       if(!c || ![0,1,2,3].includes(c.state)||![c.stability,c.difficulty,c.elapsed_days,c.scheduled_days,c.learning_steps,c.reps,c.lapses].every(v=>typeof v==="number"&&Number.isFinite(v)&&v>=0)||c.difficulty>10||c.stability>100000||!Number.isInteger(c.learning_steps)||c.learning_steps>1||!Number.isInteger(c.reps)||!Number.isInteger(c.lapses))throw new HttpError(400,"卡片调度状态无效");
       const due=iso(c.due),last=c.last_review?iso(c.last_review):undefined;
@@ -164,11 +165,20 @@ export async function importBackup(uid:string,input:any) {
     }else{
       if(![1,2,3,4].includes(row.rating)||![0,1].includes(row.is_new)||!Number.isInteger(row.duration)||row.duration<0||row.duration>3600000||typeof row.day!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(row.day))throw new HttpError(400,"复习日志无效");
       const at=iso(row.reviewed_at),id=`${uid}:${text(row.id,250)}`;
-      if(!await db().prepare("SELECT word_id FROM cards WHERE user_id=? AND word_id=?").bind(uid,wordId).first())throw new HttpError(400,"请先导入对应卡片");
+      dependencies.add(wordId);
       const snapshot=row.card_data==null?null:readMemoryCard(row.card_data);
       if(row.card_data!=null && (!snapshot || Number(snapshot.last_review)!==+new Date(at)))throw new HttpError(400,"复习记录中的记忆状态无效");
       statements.push(db().prepare("INSERT OR IGNORE INTO reviews(id,user_id,word_id,book_id,word,rating,reviewed_at,day,is_new,duration,card_data) VALUES(?,?,?,?,?,?,?,?,?,?,?)").bind(id,uid,wordId,bookId,word,row.rating,at,row.day,row.is_new,row.duration,snapshot?JSON.stringify(snapshot):null));
     }
+  }
+  if(dependencies.size){
+    const ids=[...dependencies], placeholders=ids.map(()=>"?").join(",");
+    const query=input.kind==="cards"
+      ? `SELECT id AS word_id FROM custom_words WHERE user_id=? AND id IN (${placeholders})`
+      : `SELECT word_id FROM cards WHERE user_id=? AND word_id IN (${placeholders})`;
+    const result=await db().prepare(query).bind(uid,...ids).all<{word_id:string}>();
+    const found=new Set(result.results.map(row=>row.word_id));
+    if(ids.some(id=>!found.has(id)))throw new HttpError(400,input.kind==="cards"?"请先导入对应生词":"请先导入对应卡片");
   }
   if(statements.length)await db().batch(statements);
   return {ok:true,processed:statements.length};

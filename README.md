@@ -11,6 +11,7 @@
 - 「关于」页面介绍 FSRS 原理、四级评分与本站的调度方式，并展示当前学习设置。
 - 个人学习数据导出及合并导入，仅接受从本站导出的 JSON 备份。
 - 导入保留已有卡片进度，相同备份重复导入不会重复插入记录；分批提交，中断后可重试。
+- 导入按生词、卡片、复习记录依次进行，每阶段最多并发 3 批；关联记录按批校验，并显示导入进度。
 
 学习时按空格显示释义，按 1–4 评分。到期复习优先，词书与生词本共享每日新词额度。
 
@@ -33,6 +34,7 @@ Sites 管理访问权限。当前网站仅所有者可访问，可在 Sites 中�
 node scripts/run-framework.mjs dev --hostname 127.0.0.1
 node node_modules/typescript/bin/tsc --noEmit --incremental false
 node --experimental-strip-types scripts/test-backup.mjs
+node --test tests/backup-import.mjs tests/import-d1.mjs tests/memory.mjs tests/quiz.mjs
 node scripts/run-framework.mjs build
 ```
 
