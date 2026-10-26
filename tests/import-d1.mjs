@@ -20,19 +20,20 @@ test("D1 bulk import preserves dependencies, user isolation, idempotency, and ex
     await database.batch(statements.map(sql => database.prepare(sql)));
   }
   const operations = {reads: 0, writes: 0};
+  const rawStatements = new WeakMap();
   const db = {
     prepare(sql) {
       const statement = database.prepare(sql);
       if (!sql.startsWith("SELECT")) return statement;
-      return {bind(...args) { const bound = statement.bind(...args); return {async all() { operations.reads++; return bound.all(); }}; }};
+      return {bind(...args) { const bound = statement.bind(...args); const wrapped = {async all() { operations.reads++; return bound.all(); }, async first() { operations.reads++; return bound.first(); }}; rawStatements.set(wrapped, bound); return wrapped; }};
     },
-    async batch(statements) { operations.writes++; return database.batch(statements); },
+    async batch(statements) { operations.writes++; return database.batch(statements.map(statement => rawStatements.get(statement) || statement)); },
   };
   const exports = {};
   new Function("require", "exports", compile(readFileSync(new URL("lib/server.ts", root), "utf8")))(name => {
     if (name === "cloudflare:workers") return {env: {DB: db}};
     if (name === "./books") return {catalog: require("../lib/catalog.json")};
-    if (["./types", "./study", "./memory"].includes(name)) return require(`../lib/${name.slice(2)}.ts`);
+    if (["./types", "./study", "./memory", "./word-fields"].includes(name)) return require(`../lib/${name.slice(2)}.ts`);
     throw new Error(`Unexpected import: ${name}`);
   }, exports);
   const {importBackup} = exports;
@@ -67,6 +68,50 @@ test("D1 bulk import preserves dependencies, user isolation, idempotency, and ex
   assert.equal(await count("reviews", "owner"), 50);
   await importBackup("owner", {kind: "cards", rows: [{...card("custom:0"), data: JSON.stringify({...state, reps: 99})}]});
   assert.equal(JSON.parse((await database.prepare("SELECT data FROM cards WHERE user_id=? AND word_id=?").bind("owner", "custom:0").first()).data).reps, 1);
+
+  await t.test("editing retains scheduling and deletion removes only this user's complete word history", async () => {
+    const id = "custom:editable";
+    for (const uid of ["editor", "isolated"]) {
+      await importBackup(uid, {kind: "words", rows: [word(id)]});
+      await importBackup(uid, {kind: "cards", rows: [card(id)]});
+      await importBackup(uid, {kind: "reviews", rows: [review("edit-review", id)]});
+      await database.prepare("INSERT INTO history_words VALUES(?,?,?,?,?)").bind(uid, id, "custom", "remember", "记住").run();
+    }
+    const original = await database.prepare("SELECT * FROM cards WHERE user_id=? AND word_id=?").bind("editor", id).first();
+    const updated = await exports.updateWord("editor", {id, word: "remembered", phonetic: "US", phoneticUk: "UK", meanings: [{partOfSpeech: "v.", meaning: "记得"}, {partOfSpeech: "n.", meaning: "回忆"}], phrases: [{content: "remember when", cn: "记得当时"}], sentences: []});
+    assert.equal(updated.word.definition, "v. 记得; n. 回忆");
+    assert.equal(updated.word.id, id);
+    const after = await database.prepare("SELECT * FROM cards WHERE user_id=? AND word_id=?").bind("editor", id).first();
+    for (const field of ["data", "due", "version"]) assert.equal(after[field], original[field]);
+    assert.equal(after.word, "remembered");
+    assert.equal((await database.prepare("SELECT word FROM reviews WHERE user_id=?").bind("editor").first()).word, "remembered");
+    await assert.rejects(exports.updateWord("missing", {id, word: "x", definition: "x"}), error => error.status === 404);
+    await assert.rejects(exports.deleteWord("missing", {id}), error => error.status === 404);
+    await assert.rejects(exports.addWord("editor", {word: "x", meanings: [{partOfSpeech: "invented", meaning: "x"}]}), /选择词性/);
+    await exports.deleteWord("editor", {id});
+    for (const table of ["custom_words", "cards", "reviews", "history_words"]) {
+      assert.equal(await count(table, "editor"), 0);
+      assert.equal(await count(table, "isolated"), 1);
+    }
+  });
+
+  await t.test("study count includes available new words, daily quotas, and due reviews", async () => {
+    const uid = "badge", defaults = require("../lib/types.ts").defaults;
+    const words = Array.from({length: 5}, (_, i) => word(`custom:badge-${i}`, i));
+    await importBackup(uid, {kind: "words", rows: words});
+    await importBackup(uid, {kind: "cards", rows: [card(words[0].id), {...card(words[1].id), data: JSON.stringify({...state, due: "2099-01-01T00:00:00.000Z"})}]});
+    const day = require("../lib/study.ts").localDay("Asia/Shanghai");
+    await importBackup(uid, {kind: "reviews", rows: [{...review("today-new", words[0].id), day, is_new: 1}]});
+    await importBackup(uid, {kind: "settings", settings: {...defaults, currentBook: "custom", newLimit: 2, reviewLimit: 1}});
+    let stats = (await exports.overview(uid)).stats;
+    assert.equal(stats.newRemaining, 1); assert.equal(stats.reviewRemaining, 1); assert.equal(stats.pending, 2);
+    await importBackup(uid, {kind: "reviews", rows: [{...review("today-review", words[0].id), day}]});
+    stats = (await exports.overview(uid)).stats;
+    assert.equal(stats.reviewRemaining, 0); assert.equal(stats.pending, 1);
+    await importBackup(uid, {kind: "settings", settings: {...defaults, newLimit: 0}});
+    assert.equal((await exports.overview(uid)).stats.newRemaining, 0);
+    assert.equal((await exports.overview("no-data")).stats.pending, 0);
+  });
 
   await t.test("full migration fixture with bounded concurrency and retry", async fixtureTest => {
     const fixture = new URL("outputs/legacy-migration.json", root);

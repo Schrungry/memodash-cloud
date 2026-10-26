@@ -4,6 +4,7 @@ import { defaults, type Settings, type Word } from "./types";
 import { localDay, outcomes, review, scheduler, reviveCard } from "./study";
 import { memoryTimeline, readMemoryCard, type ReviewRecord } from "./memory";
 import type { HistoryRow, WordHistory } from "./types";
+import { partsOfSpeech, formatMeanings } from "./word-fields";
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 export function db() { if (!env.DB) throw new Error("数据存储尚未就绪"); return env.DB; }
 export async function settingsFor(uid: string): Promise<Settings> {
@@ -46,8 +47,12 @@ export async function overview(uid: string) {
   const learned=all.filter(c=>c.book_id===s.currentBook).length;
   const due=active.filter(c=>c.due<=now.toISOString()).length;
   const book = catalog.find(b=>b.id===s.currentBook);
-  const total=s.currentBook==="custom"? Number((result[3].results[0] as any).count):book?.count || 0;
-  return {settings:s, stats:{today:day, newToday:Number(daily.new_count||0), reviewedToday:Number(daily.review_count||0), totalToday:Number(daily.total||0), due, learned, total, allLearned:all.length, retention:n?Math.round(retention/n*100):null, states, customCount:Number((result[3].results[0] as any).count)}, series:result[2].results, books:catalog.map(({url,...b})=>b)};
+  const customCount=Number((result[3].results[0] as any).count);
+  const total=s.currentBook==="custom"?customCount:book?.count || 0;
+  const availableNew=Math.max(0,(book?.count || 0)+customCount-active.length);
+  const newRemaining=Math.min(availableNew,Math.max(0,s.newLimit-Number(daily.new_count||0)));
+  const reviewRemaining=s.reviewLimit?Math.min(due,Math.max(0,s.reviewLimit-Number(daily.review_count||0))):due;
+  return {settings:s, stats:{today:day, newToday:Number(daily.new_count||0), reviewedToday:Number(daily.review_count||0), totalToday:Number(daily.total||0), due, newRemaining, reviewRemaining, pending:newRemaining+reviewRemaining, learned, total, allLearned:all.length, retention:n?Math.round(retention/n*100):null, states, customCount}, series:result[2].results, books:catalog.map(({url,...b})=>b)};
 }
 export async function nextCard(uid: string, origin: string) {
   const s=await settingsFor(uid); const now=new Date();const day=localDay(s.timezone,now);
@@ -87,14 +92,55 @@ export async function submitReview(uid: string, input: any, origin: string) {
 export function validateWord(input: any): Omit<Word,"id"|"rank"|"bookId"> {
   if(!input || typeof input!=="object")throw new HttpError(400,"生词格式无效");
   const text=(v:any,max:number,required=false)=>{if(typeof v!=="string" || v.length>max || (required&&!v.trim()))throw new HttpError(400,"请填写有效的单词和释义，并控制字段长度");return v.trim();};
-  const pairs=(a:any)=>{if(!Array.isArray(a)||a.length>20)throw new HttpError(400,"短语或例句格式无效");return a.map(p=>({content:text(p.content,2000),cn:text(p.cn,2000)}));};
-  return {word:text(input.word,120,true), definition:text(input.definition,4000,true), phonetic:text(input.phonetic || "",150),phoneticUk:text(input.phoneticUk || "",150),phrases:pairs(input.phrases || []),sentences:pairs(input.sentences || [])};
+  const pairs=(a:any)=>{if(!Array.isArray(a)||a.length>100)throw new HttpError(400,"短语或例句格式无效，每类最多 100 条");return a.map(p=>{if(!p||typeof p!=="object")throw new HttpError(400,"短语或例句格式无效");return {content:text(p.content,2000),cn:text(p.cn,2000)};});};
+  let meanings;
+  if(input.meanings!==undefined){
+    if(!Array.isArray(input.meanings)||!input.meanings.length||input.meanings.length>30)throw new HttpError(400,"请填写 1–30 条中文释义");
+    meanings=input.meanings.map((row:any)=>{
+      if(!row||!partsOfSpeech.some(([pos])=>pos===row.partOfSpeech))throw new HttpError(400,"请从列表中选择词性");
+      return {partOfSpeech:row.partOfSpeech,meaning:text(row.meaning,2000,true)};
+    });
+  }
+  let source;
+  if(input.source!==undefined){
+    if(!input.source||!catalog.some(book=>book.id===input.source.bookId)||typeof input.source.wordId!=="string"||input.source.wordId.length>200||!input.source.wordId.startsWith(`${input.source.bookId}:`))throw new HttpError(400,"词书来源无效");
+    source={bookId:input.source.bookId,wordId:input.source.wordId};
+  }
+  return {word:text(input.word,120,true), definition:text(meanings?formatMeanings(meanings):input.definition,4000,true), ...(meanings?{meanings}:{}), ...(source?{source}:{}), phonetic:text(input.phonetic || "",150),phoneticUk:text(input.phoneticUk || "",150),phrases:pairs(input.phrases || []),sentences:pairs(input.sentences || [])};
 }
 export async function addWord(uid:string,input:any) {
   const valid=validateWord(input);const id=`custom:${crypto.randomUUID()}`;
   const w:Word={...valid,id,bookId:"custom",rank:Date.now()};
   await db().prepare("INSERT INTO custom_words(user_id,id,data,created_at) VALUES(?,?,?,?)").bind(uid,id,JSON.stringify(w),new Date().toISOString()).run();
   return {word:w};
+}
+function customWordId(id: unknown): string {
+  if(typeof id!=="string"||!id.startsWith("custom:")||id.length>200)throw new HttpError(400,"生词编号无效");
+  return id;
+}
+export async function updateWord(uid:string,input:any) {
+  const id=customWordId(input?.id), valid=validateWord(input);
+  const old=await db().prepare("SELECT data FROM custom_words WHERE user_id=? AND id=?").bind(uid,id).first<{data:string}>();
+  if(!old)throw new HttpError(404,"生词不存在");
+  const previous:Word=JSON.parse(old.data), word:Word={...valid,id,bookId:"custom",rank:previous.rank};
+  await db().batch([
+    db().prepare("UPDATE custom_words SET data=? WHERE user_id=? AND id=?").bind(JSON.stringify(word),uid,id),
+    db().prepare("UPDATE cards SET word=? WHERE user_id=? AND word_id=?").bind(word.word,uid,id),
+    db().prepare("UPDATE reviews SET word=? WHERE user_id=? AND word_id=?").bind(word.word,uid,id),
+    db().prepare("UPDATE history_words SET word=?,definition=? WHERE user_id=? AND word_id=?").bind(word.word,word.definition,uid,id),
+  ]);
+  return {word};
+}
+export async function deleteWord(uid:string,input:any) {
+  const id=customWordId(input?.id);
+  if(!await db().prepare("SELECT id FROM custom_words WHERE user_id=? AND id=?").bind(uid,id).first())throw new HttpError(404,"生词不存在");
+  await db().batch([
+    db().prepare("DELETE FROM reviews WHERE user_id=? AND word_id=?").bind(uid,id),
+    db().prepare("DELETE FROM history_words WHERE user_id=? AND word_id=?").bind(uid,id),
+    db().prepare("DELETE FROM cards WHERE user_id=? AND word_id=?").bind(uid,id),
+    db().prepare("DELETE FROM custom_words WHERE user_id=? AND id=?").bind(uid,id),
+  ]);
+  return {ok:true};
 }
 const bookTitle = (id:string) => id==="custom" ? "我的生词本" : catalog.find(book=>book.id===id)?.title || "未知词书";
 async function ensureHistoryWords(uid:string, origin:string, wordId?:string) {

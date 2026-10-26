@@ -12,6 +12,9 @@
 - 个人学习数据导出及合并导入，仅接受从本站导出的 JSON 备份。
 - 导入保留已有卡片进度，相同备份重复导入不会重复插入记录；分批提交，中断后可重试。
 - 导入按生词、卡片、复习记录依次进行，每阶段最多并发 3 批；关联记录按批校验，并显示导入进度。
+- 添加生词先检索全部词书，可选择词书来源或填写未收录词；美英音标、按词性分条的释义、例句与词组均可编辑。
+- 编辑生词保留学习进度；删除生词同时清除该词的卡片及历史记录，执行前需要在编辑页确认。
+- 「开始学习」角标包含今日剩余新词及复习额度内的到期词；顶部「反馈」链接指向 GitHub Issues。
 
 学习时按空格显示释义，按 1–4 评分。到期复习优先，词书与生词本共享每日新词额度。
 
@@ -34,7 +37,7 @@ Sites 管理访问权限。当前网站仅所有者可访问，可在 Sites 中�
 node scripts/run-framework.mjs dev --hostname 127.0.0.1
 node node_modules/typescript/bin/tsc --noEmit --incremental false
 node --experimental-strip-types scripts/test-backup.mjs
-node --test tests/backup-import.mjs tests/import-d1.mjs tests/memory.mjs tests/quiz.mjs
+node --test tests/backup-import.mjs tests/import-d1.mjs tests/word-fields.mjs tests/memory.mjs tests/quiz.mjs
 node scripts/run-framework.mjs build
 ```
 
@@ -49,6 +52,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 ```powershell
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --port 8787 --inspector-port 0
 node scripts/qa.mjs
+node scripts/qa-words.mjs
 ```
 
 接口检查使用独立的本地测试账号，覆盖登录保护、数据隔离、跨站请求拒绝、输入校验、调度评分、重复及过期评分、并发额度、词书读取和备份往返。

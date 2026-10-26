@@ -3,9 +3,23 @@ import { gunzipSync, strFromU8 } from "fflate";
 import catalogData from "./catalog.json";
 import examBookData from "./exam-books.json";
 import type { Book, Word } from "./types";
+import { normalizeHeadword } from "./word-fields";
 export const catalog: Book[] = catalogData;
 const examBooks = new Set<string>(examBookData);
 function decode(bytes: Uint8Array) { return JSON.parse(strFromU8(bytes[0]===31&&bytes[1]===139?gunzipSync(bytes):bytes)); }
+export async function lookupBookWords(query: string, origin: string) {
+  if (!env.ASSETS) throw new Error("词书存储尚未就绪");
+  const key = normalizeHeadword(query);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)));
+  const shard = (hash[0] >> 4).toString(16);
+  const response = await env.ASSETS.fetch(new Request(`${origin}/word-index/v1/${shard}.json.gz`));
+  if (!response.ok) throw new Error("词书检索暂时不可用，请稍后重试");
+  const entries = decode(new Uint8Array(await response.arrayBuffer()));
+  const matches = Object.hasOwn(entries, key) ? entries[key] : [];
+  return {matches: matches.map(([index, rank, word, definition, phonetic, phoneticUk]: [number, number, string, string, string, string]) => ({
+    bookId: catalog[index].id, bookTitle: catalog[index].title, wordId: `${catalog[index].id}:${rank}`, word, definition, phonetic, phoneticUk,
+  })), booksSearched: catalog.length};
+}
 export async function loadBook(id: string, origin: string): Promise<Word[]> {
   const book = catalog.find(b => b.id === id);
   if (!book) throw new Error("词书不存在");
