@@ -34,6 +34,8 @@ for(const kind of ['words','cards','reviews']){
 assert.equal((await request('overview',undefined,other)).data.stats.allLearned,1);
 assert.equal((await request('history',undefined,other)).data.reviews.length,1);
 assert.equal((await request('settings',{...a.data.settings,currentBook:'CET4luan_1',newLimit:20})).status,200);
+const customCard=(await request('study')).data;assert.equal(customCard.word.bookId,'custom');assert.equal(customCard.word.word,'another');
+assert.equal((await request('review',{wordId:customCard.word.id,rating:4,version:customCard.version,requestId:crypto.randomUUID(),duration:1000})).status,200);
 const bookCard=await request('study');assert.equal(bookCard.status,200);assert.equal(bookCard.data.word.bookId,'CET4luan_1');assert.ok(bookCard.data.word.definition);
 assert.equal((await request('review',{wordId:bookCard.data.word.id,rating:4,version:bookCard.data.version,requestId:crypto.randomUUID(),duration:1000})).status,200);
 assert.equal((await request('overview')).data.books.find(book=>book.id==='CET4luan_1').learnedCount,1);
@@ -46,8 +48,9 @@ const concurrent=await Promise.all([q1,q2].map(w=>request('review',{wordId:w.id,
 assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);
 assert.equal((await request('overview',undefined,quotaUser)).data.stats.newToday,1);
 const remoteBook=a.data.books.find(b=>b.id==='KaoYanluan_1');
-await request('settings',{...a.data.settings,currentBook:remoteBook.id},quotaUser);
-const remote=await request('study',undefined,quotaUser);assert.equal(remote.status,200,JSON.stringify(remote.data));
+const remoteUser=`qa_remote_${crypto.randomUUID()}`;
+await request('settings',{...a.data.settings,currentBook:remoteBook.id},remoteUser);
+const remote=await request('study',undefined,remoteUser);assert.equal(remote.status,200,JSON.stringify(remote.data));assert.equal(remote.data.word.bookId,remoteBook.id);
 console.log(`PASS: concurrent daily quota, server wordbook initialization (${remoteBook.id}).`);
 console.log('PASS: anonymous access, two-user isolation, input validation, CSRF, FSRS scheduling, duplicate/stale ratings, quotas, history, backup roundtrip, shared server wordbook and rating.');
 

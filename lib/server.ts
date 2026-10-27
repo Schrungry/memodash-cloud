@@ -30,7 +30,7 @@ export async function customFor(uid: string): Promise<Word[]> {
 }
 async function wordsFor(uid: string, s: Settings, origin: string) {
   const custom = await customFor(uid);
-  return s.currentBook && s.currentBook !== "custom" ? [...await loadBook(s.currentBook,origin), ...custom] : custom;
+  return s.currentBook && s.currentBook !== "custom" ? [...custom, ...await loadBook(s.currentBook,origin)] : custom;
 }
 export async function overview(uid: string) {
   const s=await settingsFor(uid), day=localDay(s.timezone);

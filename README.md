@@ -17,7 +17,7 @@
 - 「开始学习」角标包含今日剩余新词及复习额度内的到期词；顶部「反馈」链接指向 GitHub Issues。
 - 词书广场显示各词书的已学词数；悬停描述可查看全文，托福 / TOEFL 等中英文分类与搜索名称兼容，空分类自动隐藏。
 
-学习时按空格显示释义，按 1–4 评分。到期复习优先，词书与生词本共享每日新词额度。
+学习时按空格显示释义，按 1–4 评分。队列顺序为到期复习 → 自定义新词 → 词书新词；词书与生词本仍共享每日新词额度。
 
 ## 技术与存储
 
@@ -54,6 +54,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --port 8787 --inspector-port 0
 node scripts/qa.mjs
 node scripts/qa-words.mjs
+node scripts/qa-queue.mjs
 ```
 
 接口检查使用独立的本地测试账号，覆盖登录保护、数据隔离、跨站请求拒绝、输入校验、调度评分、重复及过期评分、并发额度、词书读取和备份往返。
