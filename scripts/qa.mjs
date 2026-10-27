@@ -7,6 +7,7 @@ async function request(path,body,user=uid,override={}){
   const raw=await r.text();let data;try{data=JSON.parse(raw);}catch{throw new Error(`${path} HTTP ${r.status}: ${raw.slice(0,250)}`);}return {status:r.status,data};
 }
 const a=await request('overview');assert.equal(a.status,200);assert.equal(a.data.books.length,81);assert.equal(a.data.stats.allLearned,0);
+assert.ok(a.data.books.every(book=>book.learnedCount===0));
 assert.equal((await request('overview',undefined,null)).status,401);
 assert.equal((await request('settings',{...a.data.settings,newLimit:-1})).status,400);
 assert.equal((await request('words',{word:'private',definition:'私有'},uid,{origin:'https://invalid.test'})).status,403);
@@ -35,6 +36,8 @@ assert.equal((await request('history',undefined,other)).data.reviews.length,1);
 assert.equal((await request('settings',{...a.data.settings,currentBook:'CET4luan_1',newLimit:20})).status,200);
 const bookCard=await request('study');assert.equal(bookCard.status,200);assert.equal(bookCard.data.word.bookId,'CET4luan_1');assert.ok(bookCard.data.word.definition);
 assert.equal((await request('review',{wordId:bookCard.data.word.id,rating:4,version:bookCard.data.version,requestId:crypto.randomUUID(),duration:1000})).status,200);
+assert.equal((await request('overview')).data.books.find(book=>book.id==='CET4luan_1').learnedCount,1);
+assert.equal((await request('overview',undefined,other)).data.books.find(book=>book.id==='CET4luan_1').learnedCount,0);
 const quotaUser=`qa_quota_${crypto.randomUUID()}`;
 const q1=(await request('words',{word:'one',definition:'一'},quotaUser)).data.word;
 const q2=(await request('words',{word:'two',definition:'二'},quotaUser)).data.word;

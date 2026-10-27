@@ -15,6 +15,7 @@
 - 添加生词先检索全部词书，可选择词书来源或填写未收录词；美英音标、按词性分条的释义、例句与词组均可编辑。
 - 编辑生词保留学习进度；删除生词同时清除该词的卡片及历史记录，执行前需要在编辑页确认。
 - 「开始学习」角标包含今日剩余新词及复习额度内的到期词；顶部「反馈」链接指向 GitHub Issues。
+- 词书广场显示各词书的已学词数；悬停描述可查看全文，托福 / TOEFL 等中英文分类与搜索名称兼容，空分类自动隐藏。
 
 学习时按空格显示释义，按 1–4 评分。到期复习优先，词书与生词本共享每日新词额度。
 
@@ -37,7 +38,7 @@ Sites 管理访问权限。当前网站仅所有者可访问，可在 Sites 中�
 node scripts/run-framework.mjs dev --hostname 127.0.0.1
 node node_modules/typescript/bin/tsc --noEmit --incremental false
 node --experimental-strip-types scripts/test-backup.mjs
-node --test tests/backup-import.mjs tests/import-d1.mjs tests/word-fields.mjs tests/memory.mjs tests/quiz.mjs
+node --test tests/backup-import.mjs tests/import-d1.mjs tests/word-fields.mjs tests/book-catalog.mjs tests/memory.mjs tests/quiz.mjs
 node scripts/run-framework.mjs build
 ```
 

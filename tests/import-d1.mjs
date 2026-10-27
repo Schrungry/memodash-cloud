@@ -113,6 +113,20 @@ test("D1 bulk import preserves dependencies, user isolation, idempotency, and ex
     assert.equal((await exports.overview("no-data")).stats.pending, 0);
   });
 
+  await t.test("book progress counts cards once and stays scoped to each user and book", async () => {
+    const bookCard = (book_id, rank) => ({...card(`${book_id}:${rank}`), book_id});
+    const rows = [bookCard("TOEFL_2", 1), bookCard("TOEFL_2", 2), bookCard("TOEFL_3", 1)];
+    await importBackup("book-progress", {kind: "cards", rows});
+    await importBackup("book-progress", {kind: "cards", rows: [rows[0]]});
+    await importBackup("book-other", {kind: "cards", rows: [bookCard("TOEFL_2", 3)]});
+    await importBackup("book-progress", {kind: "reviews", rows: [1,2,3].map(id => ({...review(`book-review-${id}`, "TOEFL_2:1"), book_id: "TOEFL_2"}))});
+    const result = await exports.overview("book-progress");
+    assert.equal(result.books.find(book => book.id === "TOEFL_2").learnedCount, 2);
+    assert.equal(result.books.find(book => book.id === "TOEFL_3").learnedCount, 1);
+    assert.equal(result.books.find(book => book.id === "CET4luan_1").learnedCount, 0);
+    assert.equal((await exports.overview("book-other")).books.find(book => book.id === "TOEFL_2").learnedCount, 1);
+  });
+
   await t.test("full migration fixture with bounded concurrency and retry", async fixtureTest => {
     const fixture = new URL("outputs/legacy-migration.json", root);
     let input;

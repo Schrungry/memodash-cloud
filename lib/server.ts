@@ -43,8 +43,9 @@ export async function overview(uid: string) {
   const daily:any=result[0].results[0]; const all:any[]=result[1].results;
   const active=all.filter(c=>c.book_id===s.currentBook || c.book_id==="custom");
   const now=new Date(), states=[0,0,0,0], fsrs=scheduler(s); let retention=0, n=0;
-  for (const row of all) {const c=reviveCard(row.data);states[c.state]++;if(c.last_review && c.stability>0){retention+=Number(fsrs.get_retrievability(c,now,false));n++;}}
-  const learned=all.filter(c=>c.book_id===s.currentBook).length;
+  const learnedCounts=new Map<string,number>();
+  for (const row of all) {learnedCounts.set(row.book_id,(learnedCounts.get(row.book_id)||0)+1);const c=reviveCard(row.data);states[c.state]++;if(c.last_review && c.stability>0){retention+=Number(fsrs.get_retrievability(c,now,false));n++;}}
+  const learned=learnedCounts.get(s.currentBook)||0;
   const due=active.filter(c=>c.due<=now.toISOString()).length;
   const book = catalog.find(b=>b.id===s.currentBook);
   const customCount=Number((result[3].results[0] as any).count);
@@ -52,7 +53,7 @@ export async function overview(uid: string) {
   const availableNew=Math.max(0,(book?.count || 0)+customCount-active.length);
   const newRemaining=Math.min(availableNew,Math.max(0,s.newLimit-Number(daily.new_count||0)));
   const reviewRemaining=s.reviewLimit?Math.min(due,Math.max(0,s.reviewLimit-Number(daily.review_count||0))):due;
-  return {settings:s, stats:{today:day, newToday:Number(daily.new_count||0), reviewedToday:Number(daily.review_count||0), totalToday:Number(daily.total||0), due, newRemaining, reviewRemaining, pending:newRemaining+reviewRemaining, learned, total, allLearned:all.length, retention:n?Math.round(retention/n*100):null, states, customCount}, series:result[2].results, books:catalog.map(({url,...b})=>b)};
+  return {settings:s, stats:{today:day, newToday:Number(daily.new_count||0), reviewedToday:Number(daily.review_count||0), totalToday:Number(daily.total||0), due, newRemaining, reviewRemaining, pending:newRemaining+reviewRemaining, learned, total, allLearned:all.length, retention:n?Math.round(retention/n*100):null, states, customCount}, series:result[2].results, books:catalog.map(({url,...b})=>({...b,learnedCount:learnedCounts.get(b.id)||0}))};
 }
 export async function nextCard(uid: string, origin: string) {
   const s=await settingsFor(uid); const now=new Date();const day=localDay(s.timezone,now);
