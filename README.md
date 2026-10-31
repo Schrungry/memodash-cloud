@@ -7,6 +7,7 @@
 - ChatGPT 账号登录，个人生词、设置、卡片与复习记录按用户隔离。
 - 81 本词书、153009 个词条预置在服务端，使用 R2 缓存共享词书内容。
 - FSRS-6 复习调度、四级评分、每日学习额度与目标保留率设置。
+- 当前卡片附带下一张的只读预取；评分时立即切卡并保存，服务端确认队列，失败恢复原卡。统计在后台刷新。
 - 学习概览、复习统计、生词本、发音与学习历史。
 - 「关于」页面介绍 FSRS 原理、四级评分与本站的调度方式，并展示当前学习设置。
 - 个人学习数据导出及合并导入，仅接受从本站导出的 JSON 备份。
@@ -38,6 +39,7 @@ Sites 管理访问权限。当前网站仅所有者可访问，可在 Sites 中�
 node scripts/run-framework.mjs dev --hostname 127.0.0.1
 node node_modules/typescript/bin/tsc --noEmit --incremental false
 node --experimental-strip-types scripts/test-backup.mjs
+node --experimental-strip-types tests/study-session.mjs
 node --test tests/backup-import.mjs tests/import-d1.mjs tests/word-fields.mjs tests/book-catalog.mjs tests/memory.mjs tests/quiz.mjs
 node scripts/run-framework.mjs build
 ```
@@ -55,6 +57,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js de
 node scripts/qa.mjs
 node scripts/qa-words.mjs
 node scripts/qa-queue.mjs
+node scripts/qa-prefetch.mjs
 ```
 
 接口检查使用独立的本地测试账号，覆盖登录保护、数据隔离、跨站请求拒绝、输入校验、调度评分、重复及过期评分、并发额度、词书读取和备份往返。

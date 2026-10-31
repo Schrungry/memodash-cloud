@@ -1,9 +1,10 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import { LayoutDashboard, BookOpen, Library, NotebookPen, History, Settings2, ArrowUpRight, ArrowRight, ChevronRight, Volume2, Search, Plus, Check, X, LogOut, CloudCheck, RefreshCw, Sprout, Flame, Clock3, Target, Menu, Download, Info, Pencil, MessageSquare } from "lucide-react";
 import type { Settings, Book, Word } from "../lib/types";
 import { parseBackup, importBackupData } from "../lib/backup";
 import { bookCategories, matchesBookCategory, matchesBookSearch } from "../lib/book-catalog";
+import { StudySession } from "../lib/study-session";
 import About from "./about";
 import CustomWordEditor from "./custom-word-editor";
 import StudyCard from "./study-card";
@@ -15,19 +16,21 @@ function dateLabel(day:string){return new Date(day+"T12:00:00Z").toLocaleDateStr
 function download(data:unknown){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download=`memodash-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);}
 export default function MemoDash({user}:{user:{name:string;email:string}}){
   const [tab,setTab]=useState<Tab>("dashboard"),[data,setData]=useState<any>(null),[busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState(""),[mobile,setMobile]=useState(false);
-  const [card,setCard]=useState<any>(null),[cardLoading,setCardLoading]=useState(false),[search,setSearch]=useState(""),[category,setCategory]=useState("全部"),[words,setWords]=useState<Word[]>([]),[adding,setAdding]=useState(false),[draft,setDraft]=useState<Settings|null>(null);
+  const [session]=useState(()=>new StudySession(api));
+  const {card,loading:cardLoading}=useSyncExternalStore(session.subscribe,session.getSnapshot,session.getSnapshot);
+  const [search,setSearch]=useState(""),[category,setCategory]=useState("全部"),[words,setWords]=useState<Word[]>([]),[adding,setAdding]=useState(false),[draft,setDraft]=useState<Settings|null>(null);
   const [editingWord,setEditingWord]=useState<Word|null>(null);
-  const started=useRef(Date.now()), requestId=useRef(""),saving=useRef(false);
+  const saving=useRef(false),refreshVersion=useRef(0);
   const [importProgress,setImportProgress]=useState<{completed:number;total:number}|null>(null);
-  const refresh=useCallback(async()=>{const d=await api("overview");setData(d);setDraft(d.settings);return d;},[]);
+  const refresh=useCallback(async()=>{const version=++refreshVersion.current;const d=await api("overview");if(version===refreshVersion.current){setData(d);setDraft(d.settings);}return d;},[]);
   const go=useCallback((next:Tab)=>{setTab(next);setError("");setSearch("");setMobile(false);history.replaceState(null,"",`#${next}`);},[]);
-  const fetchCard=useCallback(async()=>{setCardLoading(true);setCard(null);try{const c=await api("study");started.current=Date.now();requestId.current=crypto.randomUUID();setCard({...c,cardKey:requestId.current});}catch(e){setError((e as Error).message);}finally{setCardLoading(false);}},[]);
+  const fetchCard=useCallback(async()=>{try{await session.load();}catch(e){setError((e as Error).message);}},[session]);
   useEffect(()=>{const syncTab=()=>{const t=location.hash.slice(1) as Tab;if(tabs.some(x=>x.id===t)){setTab(t);setMobile(false);}};syncTab();window.addEventListener("hashchange",syncTab);refresh().catch(e=>setError(e.message));return()=>window.removeEventListener("hashchange",syncTab);},[refresh]);
-  useEffect(()=>{if(!data)return;if(tab==="study")fetchCard();if(tab==="words")api("words").then(d=>setWords(d.words)).catch(e=>setError(e.message));},[tab,!!data,fetchCard]);
+  useEffect(()=>{if(!data)return;if(tab==="study"){fetchCard();return session.invalidate;}if(tab==="words")api("words").then(d=>setWords(d.words)).catch(e=>setError(e.message));},[tab,!!data,fetchCard,session]);
   useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(""),3500);return()=>clearTimeout(t);},[notice]);
-  const act=async(fn:()=>Promise<void>)=>{if(saving.current)return;saving.current=true;setBusy(true);setError("");try{await fn();}catch(e){setError((e as Error).message);}finally{saving.current=false;setBusy(false);}};
+  const act=async(fn:()=>Promise<void>)=>{if(saving.current||session.getSnapshot().saving)return;saving.current=true;setBusy(true);setError("");try{await fn();}catch(e){setError((e as Error).message);}finally{saving.current=false;setBusy(false);}};
   const play=useCallback((text:string,accent:"us"|"uk"="us")=>{const audio=new Audio(`https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(text)}&type=${accent==="us"?2:1}`);audio.play().catch(()=>setNotice("发音暂时无法播放，请稍后再试"));},[]);
-  const rate=(rating:number)=>act(async()=>{if(!card?.word)return;await api("review",{wordId:card.word.id,version:card.version,rating,requestId:requestId.current,duration:Date.now()-started.current});await fetchCard();await refresh();});
+  const rate=(rating:number)=>act(async()=>{if(await session.rate(rating))void refresh().catch(()=>setNotice("评分已保存，统计暂未刷新"));});
   const selectBook=(id:string)=>act(async()=>{await api("settings",{...data.settings,currentBook:id});await refresh();setNotice("学习词书已切换");});
   const closeWordEditor=useCallback(()=>setAdding(false),[]);
   const openAddWord=()=>{setEditingWord(null);setAdding(true);};

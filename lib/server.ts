@@ -5,6 +5,7 @@ import { localDay, outcomes, review, scheduler, reviveCard } from "./study";
 import { memoryTimeline, readMemoryCard, type ReviewRecord } from "./memory";
 import type { HistoryRow, WordHistory } from "./types";
 import { partsOfSpeech, formatMeanings } from "./word-fields";
+import type { PreparedCard } from "./study-session";
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 export function db() { if (!env.DB) throw new Error("数据存储尚未就绪"); return env.DB; }
 export async function settingsFor(uid: string): Promise<Settings> {
@@ -63,17 +64,31 @@ export async function nextCard(uid: string, origin: string) {
   ])]);
   const cards:any[]=result[0].results; const counts:any=result[1].results[0]; const map=new Map(words.map(w=>[w.id,w]));
   const due=cards.filter(c=>c.due<=now.toISOString() && map.has(c.word_id));
-  const canReview=!s.reviewLimit || Number(counts.review_count||0)<s.reviewLimit;
-  const row=canReview?due[0]:undefined;
   const learned=new Set(cards.map(c=>c.word_id));
-  const word=row?map.get(row.word_id):Number(counts.new_count||0)<s.newLimit?words.find(w=>!learned.has(w.id)):undefined;
-  if (!word) return {word:null, due:due.length, nextDue:cards.find(c=>c.due>now.toISOString())?.due || null, reason:!words.length?"选择词书或添加生词，开始你的第一次学习。":!canReview&&due.length?"今日复习额度已完成，明天继续。":"当前学习任务已完成，稍后再来看看。"};
-  return {word, version:row?.version || 0, isNew:!row, outcomes:outcomes(row?.data || null,s,now), due:due.length};
+  // Prepare one lookahead from the same read-only snapshot. Account for the
+  // displayed card's quota, but do not create cards or advance learning here.
+  const choose=(completed?:{id:string;isNew:boolean}):PreparedCard=>{
+    const remainingDue=completed?due.filter(c=>c.word_id!==completed.id):due;
+    const canReview=!s.reviewLimit || Number(counts.review_count||0)+(completed&&!completed.isNew?1:0)<s.reviewLimit;
+    const row=canReview?remainingDue[0]:undefined;
+    const word=row?map.get(row.word_id):Number(counts.new_count||0)+(completed?.isNew?1:0)<s.newLimit?words.find(w=>!learned.has(w.id)&&w.id!==completed?.id):undefined;
+    if (!word) return {word:null, due:remainingDue.length, nextDue:cards.find(c=>c.word_id!==completed?.id&&c.due>now.toISOString())?.due || null, reason:!words.length?"选择词书或添加生词，开始你的第一次学习。":!canReview&&remainingDue.length?"今日复习额度已完成，明天继续。":"当前学习任务已完成，稍后再来看看。"};
+    return {word, version:row?.version || 0, isNew:!row, outcomes:outcomes(row?.data || null,s,now), due:remainingDue.length};
+  };
+  const current=choose();
+  return current.word?{...current,next:choose({id:current.word.id,isNew:current.isNew})}:current;
+}
+async function reviewResponse(uid:string, origin:string, includeNext:boolean) {
+  if(includeNext)try{return {ok:true,next:await nextCard(uid,origin)};}catch(error){
+    // The write has committed. A failed queue read must not look like a failed save.
+    console.error("Next card preparation failed",error instanceof Error?error.message:"unknown");
+  }
+  return {ok:true};
 }
 export async function submitReview(uid: string, input: any, origin: string) {
   if (!input || typeof input.wordId!=="string" || ![1,2,3,4].includes(input.rating) || !Number.isInteger(input.version) || input.version<0 || typeof input.requestId!=="string" || !/^[\da-f-]{36}$/i.test(input.requestId)) throw new HttpError(400,"评分格式无效");
   const requestId=`${uid}:${input.requestId}`;
-  if(await db().prepare("SELECT id FROM reviews WHERE id=? AND user_id=?").bind(requestId,uid).first()) return {ok:true};
+  if(await db().prepare("SELECT id FROM reviews WHERE id=? AND user_id=?").bind(requestId,uid).first()) return reviewResponse(uid,origin,input.includeNext===true);
   const s=await settingsFor(uid), now=new Date(), day=localDay(s.timezone,now);
   const word=(await wordsFor(uid,s,origin)).find(w=>w.id===input.wordId);
   if (!word) throw new HttpError(404,"当前学习列表中没有此单词");
@@ -88,7 +103,7 @@ export async function submitReview(uid: string, input: any, origin: string) {
     db().prepare("INSERT INTO history_words(user_id,word_id,book_id,word,definition) VALUES(?,?,?,?,?) ON CONFLICT(user_id,word_id) DO UPDATE SET definition=excluded.definition,word=excluded.word").bind(uid,word.id,word.bookId,word.word,word.definition),
   ]);
   if (!result[0].meta.changes) throw new HttpError(409,"学习额度或卡片状态已更新，请刷新后继续");
-  return {ok:true};
+  return reviewResponse(uid,origin,input.includeNext===true);
 }
 export function validateWord(input: any): Omit<Word,"id"|"rank"|"bookId"> {
   if(!input || typeof input!=="object")throw new HttpError(400,"生词格式无效");
