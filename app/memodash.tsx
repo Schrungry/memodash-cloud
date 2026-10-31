@@ -24,7 +24,7 @@ export default function MemoDash({user}:{user:{name:string;email:string}}){
   const [importProgress,setImportProgress]=useState<{completed:number;total:number}|null>(null);
   const refresh=useCallback(async()=>{const version=++refreshVersion.current;const d=await api("overview");if(version===refreshVersion.current){setData(d);setDraft(d.settings);}return d;},[]);
   const go=useCallback((next:Tab)=>{setTab(next);setError("");setSearch("");setMobile(false);history.replaceState(null,"",`#${next}`);},[]);
-  const fetchCard=useCallback(async()=>{try{await session.load();}catch(e){setError((e as Error).message);}},[session]);
+  const fetchCard=useCallback(async()=>{setError("");try{await session.load();}catch(e){setError((e as Error).message);}},[session]);
   useEffect(()=>{const syncTab=()=>{const t=location.hash.slice(1) as Tab;if(tabs.some(x=>x.id===t)){setTab(t);setMobile(false);}};syncTab();window.addEventListener("hashchange",syncTab);refresh().catch(e=>setError(e.message));return()=>window.removeEventListener("hashchange",syncTab);},[refresh]);
   useEffect(()=>{if(!data)return;if(tab==="study"){fetchCard();return session.invalidate;}if(tab==="words")api("words").then(d=>setWords(d.words)).catch(e=>setError(e.message));},[tab,!!data,fetchCard,session]);
   useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(""),3500);return()=>clearTimeout(t);},[notice]);

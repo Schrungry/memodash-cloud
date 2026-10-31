@@ -56,7 +56,8 @@ export async function overview(uid: string) {
   const reviewRemaining=s.reviewLimit?Math.min(due,Math.max(0,s.reviewLimit-Number(daily.review_count||0))):due;
   return {settings:s, stats:{today:day, newToday:Number(daily.new_count||0), reviewedToday:Number(daily.review_count||0), totalToday:Number(daily.total||0), due, newRemaining, reviewRemaining, pending:newRemaining+reviewRemaining, learned, total, allLearned:all.length, retention:n?Math.round(retention/n*100):null, states, customCount}, series:result[2].results, books:catalog.map(({url,...b})=>({...b,learnedCount:learnedCounts.get(b.id)||0}))};
 }
-export async function nextCard(uid: string, origin: string) {
+type PreparedNext = {wordId:string;version:number};
+export async function nextCard(uid: string, origin: string, prepared?:PreparedNext) {
   const s=await settingsFor(uid); const now=new Date();const day=localDay(s.timezone,now);
   const [words, result]=await Promise.all([wordsFor(uid,s,origin), db().batch([
     db().prepare("SELECT word_id, data, due, version FROM cards WHERE user_id=? AND (book_id=? OR book_id='custom') ORDER BY due").bind(uid,s.currentBook),
@@ -67,19 +68,28 @@ export async function nextCard(uid: string, origin: string) {
   const learned=new Set(cards.map(c=>c.word_id));
   // Prepare one lookahead from the same read-only snapshot. Account for the
   // displayed card's quota, but do not create cards or advance learning here.
-  const choose=(completed?:{id:string;isNew:boolean}):PreparedCard=>{
+  const choose=(completed?:{id:string;isNew:boolean}, preferred?:PreparedNext):PreparedCard=>{
     const remainingDue=completed?due.filter(c=>c.word_id!==completed.id):due;
     const canReview=!s.reviewLimit || Number(counts.review_count||0)+(completed&&!completed.isNew?1:0)<s.reviewLimit;
-    const row=canReview?remainingDue[0]:undefined;
-    const word=row?map.get(row.word_id):Number(counts.new_count||0)+(completed?.isNew?1:0)<s.newLimit?words.find(w=>!learned.has(w.id)&&w.id!==completed?.id):undefined;
+    const canLearn=Number(counts.new_count||0)+(completed?.isNew?1:0)<s.newLimit;
+    let row=canReview?remainingDue[0]:undefined;
+    let word=row?map.get(row.word_id):canLearn?words.find(w=>!learned.has(w.id)&&w.id!==completed?.id):undefined;
+    // A card already on screen remains current when another review becomes due.
+    // Still enforce scope, version, due status, and quota before confirming it.
+    if(preferred&&preferred.wordId!==completed?.id){
+      const target=map.get(preferred.wordId),old=cards.find(c=>c.word_id===preferred.wordId);
+      if(target&&(old?canReview&&old.version===preferred.version&&remainingDue.includes(old):canLearn&&preferred.version===0)){
+        row=old;word=target;
+      }
+    }
     if (!word) return {word:null, due:remainingDue.length, nextDue:cards.find(c=>c.word_id!==completed?.id&&c.due>now.toISOString())?.due || null, reason:!words.length?"选择词书或添加生词，开始你的第一次学习。":!canReview&&remainingDue.length?"今日复习额度已完成，明天继续。":"当前学习任务已完成，稍后再来看看。"};
     return {word, version:row?.version || 0, isNew:!row, outcomes:outcomes(row?.data || null,s,now), due:remainingDue.length};
   };
-  const current=choose();
+  const current=choose(undefined,prepared);
   return current.word?{...current,next:choose({id:current.word.id,isNew:current.isNew})}:current;
 }
-async function reviewResponse(uid:string, origin:string, includeNext:boolean) {
-  if(includeNext)try{return {ok:true,next:await nextCard(uid,origin)};}catch(error){
+async function reviewResponse(uid:string, origin:string, includeNext:boolean, prepared?:PreparedNext) {
+  if(includeNext)try{return {ok:true,next:await nextCard(uid,origin,prepared)};}catch(error){
     // The write has committed. A failed queue read must not look like a failed save.
     console.error("Next card preparation failed",error instanceof Error?error.message:"unknown");
   }
@@ -87,8 +97,10 @@ async function reviewResponse(uid:string, origin:string, includeNext:boolean) {
 }
 export async function submitReview(uid: string, input: any, origin: string) {
   if (!input || typeof input.wordId!=="string" || ![1,2,3,4].includes(input.rating) || !Number.isInteger(input.version) || input.version<0 || typeof input.requestId!=="string" || !/^[\da-f-]{36}$/i.test(input.requestId)) throw new HttpError(400,"评分格式无效");
+  const prepared=input.preparedNext as PreparedNext | undefined;
+  if(prepared!==undefined&&(!prepared||typeof prepared.wordId!=="string"||!prepared.wordId||prepared.wordId.length>200||!Number.isInteger(prepared.version)||prepared.version<0))throw new HttpError(400,"预取卡片格式无效");
   const requestId=`${uid}:${input.requestId}`;
-  if(await db().prepare("SELECT id FROM reviews WHERE id=? AND user_id=?").bind(requestId,uid).first()) return reviewResponse(uid,origin,input.includeNext===true);
+  if(await db().prepare("SELECT id FROM reviews WHERE id=? AND user_id=?").bind(requestId,uid).first()) return reviewResponse(uid,origin,input.includeNext===true,prepared);
   const s=await settingsFor(uid), now=new Date(), day=localDay(s.timezone,now);
   const word=(await wordsFor(uid,s,origin)).find(w=>w.id===input.wordId);
   if (!word) throw new HttpError(404,"当前学习列表中没有此单词");
@@ -103,7 +115,7 @@ export async function submitReview(uid: string, input: any, origin: string) {
     db().prepare("INSERT INTO history_words(user_id,word_id,book_id,word,definition) VALUES(?,?,?,?,?) ON CONFLICT(user_id,word_id) DO UPDATE SET definition=excluded.definition,word=excluded.word").bind(uid,word.id,word.bookId,word.word,word.definition),
   ]);
   if (!result[0].meta.changes) throw new HttpError(409,"学习额度或卡片状态已更新，请刷新后继续");
-  return reviewResponse(uid,origin,input.includeNext===true);
+  return reviewResponse(uid,origin,input.includeNext===true,prepared);
 }
 export function validateWord(input: any): Omit<Word,"id"|"rank"|"bookId"> {
   if(!input || typeof input!=="object")throw new HttpError(400,"生词格式无效");

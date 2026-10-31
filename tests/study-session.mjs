@@ -9,7 +9,7 @@ function setup(request){let time=1000,serial=0;const session=new StudySession(re
 
 test("next card appears before the save roundtrip, with no extra study request or duplicate score",async()=>{
   const save=deferred(),calls=[];
-  const {session,tick}=setup(async(path,body)=>{calls.push({path,body});return path==="study"?card("one",card("two")):save.promise;});
+  const {session,tick}=setup(async(path,body)=>{calls.push({path,body});return path==="study"?card("one",card("two")):body.wordId==="one"?save.promise:{ok:true,next:card("three")};});
   await session.load();tick(7000);
   const pending=session.rate(3);
   assert.equal(session.getSnapshot().card.word.id,"two");
@@ -40,16 +40,35 @@ test("save failure restores the rated card and retry uses its original idempoten
   assert.equal(session.getSnapshot().card.word.id,"two");
 });
 
-test("canonical response replaces stale prefetch and completion waits for persistence",async()=>{
+test("late queue changes never replace a displayed card; stale confirmation requires an explicit refresh",async()=>{
   const save=deferred();
   const {session}=setup(async path=>path==="study"?card("one",card("stale")):save.promise);
-  await session.load();const pending=session.rate(4);save.resolve({ok:true,next:card("due-in-another-window")});await pending;
-  assert.equal(session.getSnapshot().card.word.id,"due-in-another-window");
+  await session.load();const pending=session.rate(4);
+  const displayedKey=session.getSnapshot().card.cardKey;
+  save.resolve({ok:true,next:card("due-in-another-window")});
+  await assert.rejects(pending,/刷新学习队列/);
+  assert.equal(session.getSnapshot().card.word.id,"stale");
+  assert.equal(session.getSnapshot().card.cardKey,displayedKey);
+  assert.equal(session.getSnapshot().card.unavailable,true);
+  assert.equal(await session.rate(3),false,"An invalidated card cannot be scored before explicit refresh");
   const final=deferred();const {session:last}=setup(async path=>path==="study"?card("last",empty):final.promise);
   await last.load();const done=last.rate(4);
   assert.equal(last.getSnapshot().card.word.id,"last");
   final.resolve({ok:true,next:empty});await done;
   assert.equal(last.getSnapshot().card.word,null);
+});
+
+test("confirmation pins the visible word, preserves its content and timer, and only prepares the following card",async()=>{
+  const save=deferred(),calls=[];
+  const {session,tick}=setup(async(path,body)=>{calls.push({path,body});return path==="study"?card("one",card("visible")):save.promise;});
+  await session.load();const pending=session.rate(3);
+  const shown=session.getSnapshot().card;tick(1000);await Promise.resolve();
+  assert.deepEqual(calls[1].body.preparedNext,{wordId:"visible",version:0});
+  const confirmed=card("visible",card("newly-due"));confirmed.word.word="changed metadata";
+  save.resolve({ok:true,next:confirmed});await pending;
+  assert.equal(session.getSnapshot().card.word.word,"visible");
+  assert.equal(session.getSnapshot().card.cardKey,shown.cardKey);
+  assert.equal(session.getSnapshot().card.next.word.id,"newly-due");
 });
 
 test("refresh races, leaving study, and returning during a save cannot install stale cards",async()=>{
@@ -69,7 +88,8 @@ test("saved review with a failed follow-up read never restores a card that was a
   let reads=0;
   const {session}=setup(async path=>{if(path==="review")return {ok:true};if(!reads++)return card("one",card("two"));throw new Error("queue unavailable");});
   await session.load();await assert.rejects(session.rate(4),/queue unavailable/);
-  assert.equal(session.getSnapshot().card,null);
+  assert.equal(session.getSnapshot().card.word.id,"two");
+  assert.equal(session.getSnapshot().card.unavailable,true);
   assert.equal(session.getSnapshot().saving,false);
   assert.equal(await session.rate(4),false);
 });

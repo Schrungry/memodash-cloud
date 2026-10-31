@@ -11,11 +11,12 @@ function interval(due: string) {
   return minutes < 60 ? `${minutes} 分钟` : minutes < 1440 ? `${Math.round(minutes / 60)} 小时` : `${Math.round(minutes / 1440)} 天`;
 }
 
-type StudyCardData = { word: Word; isNew: boolean; outcomes: {due: string}[]; initialRevealed?: boolean };
+type StudyCardData = { word: Word; isNew: boolean; outcomes: {due: string}[]; initialRevealed?: boolean; unavailable?: boolean };
 export default function StudyCard({card, settings, busy, onPlay, onRate}:{
   card: StudyCardData; settings: Settings; busy: boolean;
   onPlay: (word: string, accent: "us" | "uk") => void; onRate: (rating: number) => void;
 }) {
+  busy=busy||!!card.unavailable;
   const [question] = useState(() => chooseReviewQuestion(card.word, card.isNew));
   const [flipped, setFlipped] = useState(!!card.initialRevealed);
   const [input, setInput] = useState("");
@@ -76,6 +77,6 @@ export default function StudyCard({card, settings, busy, onPlay, onRate}:{
       <div className="card-bottom">{flipped ? <span>根据真实的回忆感受，选择一个评分。</span> : <button className={question ? "button" : "button primary"} onClick={reveal}>{question ? "查看答案" : "显示释义"}<kbd>Space</kbd></button>}</div>
     </section>
     {flipped && <div className="rating-grid">{labels.map((label,i) => <button disabled={busy} className={`rating rating-${i}`} key={label} onClick={() => onRate(i+1)}><span>{label}<kbd>{i+1}</kbd></span><small>{interval(card.outcomes[i].due)}后</small></button>)}</div>}
-    <p className="keyboard-hint" aria-live="polite">{busy ? "正在保存评分…" : question?.kind === "choice" && !flipped ? "点击选项或按数字 1–4 作答" : question?.kind === "cloze" && !flipped ? "输入答案并确认，或查看答案" : flipped ? "按数字 1–4 评分" : "空格显示释义"} <span>·</span> 进度自动保存</p>
+    <p className="keyboard-hint" aria-live="polite">{card.unavailable ? "卡片状态已变化，请刷新学习队列" : busy ? "正在保存评分…" : question?.kind === "choice" && !flipped ? "点击选项或按数字 1–4 作答" : question?.kind === "cloze" && !flipped ? "输入答案并确认，或查看答案" : flipped ? "按数字 1–4 评分" : "空格显示释义"} <span>·</span> 进度自动保存</p>
   </>;
 }

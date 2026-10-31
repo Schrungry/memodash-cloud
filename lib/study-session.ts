@@ -3,7 +3,7 @@ import type { Word } from "./types";
 export type PreparedCard = {word:null; due?:number; reason?:string; nextDue?:string | null} | {
   word:Word; version:number; isNew:boolean; outcomes:{due:string}[]; due:number; next?:PreparedCard;
 };
-export type VisibleCard = PreparedCard & {cardKey:string; initialRevealed?:boolean};
+export type VisibleCard = PreparedCard & {cardKey:string; initialRevealed?:boolean; unavailable?:boolean};
 type State = {card:VisibleCard | null; loading:boolean; saving:boolean};
 type Request = (path:string, body?:unknown)=>Promise<any>;
 
@@ -24,9 +24,9 @@ export class StudySession {
   getSnapshot=()=>this.state;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   private update(patch:Partial<State>){this.state={...this.state,...patch};for(const listener of this.listeners)listener();}
-  private show(card:PreparedCard, preserveKey?:string){
-    if(!preserveKey)this.started=this.now();
-    this.update({card:{...card,cardKey:preserveKey||this.uuid()},loading:false});
+  private show(card:PreparedCard){
+    this.started=this.now();
+    this.update({card:{...card,cardKey:this.uuid()},loading:false});
   }
   invalidate=()=>{this.generation++;this.update({card:null,loading:false});};
   load=async()=>{
@@ -43,13 +43,15 @@ export class StudySession {
   };
   rate=(rating:number):Promise<boolean>=>{
     const current=this.state.card;
-    if(this.pendingReview||this.state.saving||this.state.loading||!current?.word)return Promise.resolve(false);
+    if(this.pendingReview||this.state.saving||this.state.loading||!current?.word||current.unavailable)return Promise.resolve(false);
     const generation=this.generation, started=this.started;
-    const body={wordId:current.word.id,version:current.version,rating,requestId:current.cardKey,duration:this.now()-started,includeNext:true};
+    const prepared=current.next?.word?current.next:undefined;
+    const body={wordId:current.word.id,version:current.version,rating,requestId:current.cardKey,duration:this.now()-started,includeNext:true,
+      ...(prepared?{preparedNext:{wordId:prepared.word.id,version:prepared.version}}:{})};
     this.update({saving:true});
     // Only a real prepared word is shown optimistically; completion is announced
     // after saving. Scoring stays locked until the server confirms the queue.
-    if(current.next?.word)this.show(current.next);
+    if(prepared)this.show(prepared);
     const task=(async()=>{
       let saved=false;
       try{
@@ -59,19 +61,24 @@ export class StudySession {
         let next:PreparedCard;
         if(response.next)next=response.next;
         else{
-          this.update({card:null,loading:true});
+          if(!prepared)this.update({card:null,loading:true});
           next=await this.request("study");
         }
         if(generation===this.generation){
           const displayed=this.state.card;
-          const matches=displayed?.word&&next.word&&displayed.word.id===next.word.id&&displayed.version===next.version;
-          this.show(next,matches?displayed.cardKey:undefined);
+          if(prepared&&displayed?.word){
+            if(!next.word||displayed.word.id!==next.word.id||displayed.version!==next.version)
+              throw new Error("当前卡片已更新或今日额度已变化，请刷新学习队列后继续。");
+            // Confirmation can prepare the following card, never replace the
+            // visible word, its answer state, request ID, or study timer.
+            this.update({card:{...displayed,next:next.next}});
+          }else this.show(next);
         }
         return true;
       }catch(error){
         if(generation===this.generation){
           if(!saved){this.started=started;this.update({card:{...current,initialRevealed:true},loading:false});}
-          else this.update({card:null,loading:false});
+          else this.update({card:prepared&&this.state.card?{...this.state.card,unavailable:true}:null,loading:false});
         }
         throw error;
       }finally{
